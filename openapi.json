@@ -1,0 +1,255 @@
+{
+  "components": {
+    "requestBodies": {
+      "[DELETE]-users-:id": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "properties": {
+                "age": {
+                  "type": "integer"
+                },
+                "awards": {
+                  "type": "integer"
+                },
+                "created_at": {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "firstname": {
+                  "type": "string"
+                },
+                "is_admin": {
+                  "type": "boolean"
+                },
+                "lastname": {
+                  "type": "string"
+                },
+                "points": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "type": "object"
+            }
+          }
+        }
+      },
+      "[GET]-users-:id": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "properties": {
+                "age": {
+                  "type": "integer"
+                },
+                "awards": {
+                  "type": "integer"
+                },
+                "created_at": {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "firstname": {
+                  "type": "string"
+                },
+                "is_admin": {
+                  "type": "boolean"
+                },
+                "lastname": {
+                  "type": "string"
+                },
+                "points": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "type": "object"
+            }
+          }
+        }
+      },
+      "[POST]-users-:id": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "properties": {
+                "age": {
+                  "type": "integer"
+                },
+                "awards": {
+                  "type": "integer"
+                },
+                "created_at": {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "firstname": {
+                  "type": "string"
+                },
+                "is_admin": {
+                  "type": "boolean"
+                },
+                "lastname": {
+                  "type": "string"
+                },
+                "points": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "type": "object"
+            }
+          }
+        }
+      },
+      "[PUT]-users-:id": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "properties": {
+                "age": {
+                  "type": "integer"
+                },
+                "awards": {
+                  "type": "integer"
+                },
+                "created_at": {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "firstname": {
+                  "type": "string"
+                },
+                "is_admin": {
+                  "type": "boolean"
+                },
+                "lastname": {
+                  "type": "string"
+                },
+                "points": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "type": "object"
+            }
+          }
+        }
+      }
+    }
+  },
+  "info": {
+    "title": "LiveSession Internal Web API",
+    "version": ""
+  },
+  "openapi": "3.0.0",
+  "paths": {
+    "/users/:id": {
+      "delete": {
+        "requestBody": {
+          "$ref": "#/components/requestBodies/[DELETE]-users-:id"
+        },
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "id": {
+                      "type": "integer"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "requestBody": {
+          "$ref": "#/components/requestBodies/[GET]-users-:id"
+        },
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "id": {
+                      "type": "integer"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "requestBody": {
+          "$ref": "#/components/requestBodies/[POST]-users-:id"
+        },
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "requestBody": {
+          "$ref": "#/components/requestBodies/[PUT]-users-:id"
+        },
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "servers": [
+    {
+      "description": "Production",
+      "url": "https://api.livesession.io"
+    },
+    {
+      "description": "Labs",
+      "url": "https://api-labs.livesession.io/"
+    },
+    {
+      "description": "Local",
+      "url": "http://localhost:3001"
+    }
+  ]
+}
