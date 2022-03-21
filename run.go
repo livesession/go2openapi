@@ -1,4 +1,4 @@
-package main
+package restlix
 
 import (
 	"log"
@@ -6,20 +6,12 @@ import (
 	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
-	"restflix/test/app"
+	"github.com/kataras/iris/v12"
 )
 
-// TODO: support methods and functions
-// TODO: support recursion search
-func main() {
-	go func() {
-		app.Init() // TODO:
-	}()
-	time.Sleep(time.Second)
-
-	//operation := swag.NewOperation(nil)
-
-	openapi := &openapi3.T{
+// TODO: custom open api
+func initOpenAPI() *openapi3.T {
+	return &openapi3.T{
 		OpenAPI: "3.0.0",
 		Info: &openapi3.Info{
 			//Version: "", TODO: currently ls does not support versioning
@@ -53,21 +45,35 @@ func main() {
 			RequestBodies: make(openapi3.RequestBodies),
 		},
 	}
+}
 
-	var validationIdentifier = func() []string { // TODO: more identifiers
-		return []string{"baseController", "ValidateBody"}
+func save(openapi *openapi3.T, path string) {
+	if path == "" {
+		path = "./openapi.json"
 	}
+	data, _ := openapi.MarshalJSON()
 
-	// TODO: more router strategies
-	irisRouterStrategy(app.App(), openapi, validationIdentifier) // 1. iris strategy
-
-	data, _ := openapi.MarshalJSON() // 2. parse open api struct into json
-
-	f, err := os.Create("./openapi.json") // 3. write into file
+	f, err := os.Create(path)
 	if err != nil {
 		log.Fatal(err)
 	}
-	f.WriteString(string(data))
+	_, err = f.WriteString(string(data))
+	if err != nil {
+		log.Fatal(err)
+	}
+}
 
-	return
+func Iris(app *iris.Application, searchIdentifiers []*SearchIdentifier, structsMappingRootPath string, savePath string) {
+	// wait for router registration
+	go func() {
+		time.Sleep(time.Second * 2)
+
+		openapi := initOpenAPI()
+		if err := irisRouterStrategy(app, openapi, searchIdentifiers, structsMappingRootPath); err != nil {
+			panic(err)
+		}
+		save(openapi, savePath)
+
+		log.Println("finished openapi with iris strategy")
+	}()
 }

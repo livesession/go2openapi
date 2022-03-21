@@ -1,14 +1,30 @@
-package main
+package restlix
 
 import (
-	"go/ast"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 )
 
 var compilerClousureSuffix = "-fm"
+
+func isSubPath(parent, sub string) (bool, error) {
+	up := ".." + string(os.PathSeparator)
+
+	// path-comparisons using filepath.Abs don't work reliably according to docs (no unique representation).
+	rel, err := filepath.Rel(parent, sub)
+	if err != nil {
+		return false, err
+	}
+	if !strings.HasPrefix(rel, up) && rel != ".." {
+		return true, nil
+	}
+	return false, nil
+}
 
 func reverseSliceString(s []string) {
 	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 {
@@ -32,46 +48,6 @@ func getType(typ string) interface{} {
 	}
 
 	return nil
-}
-
-func matchCallExpression(matchIdentifier func() []string, exp ast.Expr) (*ast.CallExpr, bool) {
-	call, ok := exp.(*ast.CallExpr)
-	if !ok {
-		return nil, false
-	}
-
-	fun, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return nil, false
-	}
-
-	ids := matchIdentifier()
-	reverseSliceString(ids)
-
-	var f *ast.SelectorExpr
-	f = fun
-
-	expect := len(ids)
-	current := 0
-
-	for _, id := range ids {
-		if f.Sel.Name != id {
-			break
-		}
-
-		current++
-
-		switch t := f.X.(type) {
-		case *ast.CallExpr:
-			if s, ok := t.Fun.(*ast.SelectorExpr); ok {
-				f = s
-			}
-		case *ast.SelectorExpr:
-			f = t
-		}
-	}
-
-	return call, expect == current
 }
 
 func openAPIOperationByMethod(pathItem *openapi3.PathItem, method string) *openapi3.Operation {

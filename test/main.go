@@ -1,7 +1,7 @@
 package main
 
 import (
-	"restflix/test/app"
+	"github.com/zdunecki/restflix/test/app"
 )
 
 func main() {

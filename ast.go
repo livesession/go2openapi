@@ -1,4 +1,4 @@
-package main
+package restlix
 
 import (
 	"errors"
@@ -8,6 +8,9 @@ import (
 	"go/token"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,9 +19,26 @@ import (
 	"github.com/getkin/kin-openapi/openapi3gen"
 	"github.com/kataras/iris/v12/core/router"
 	dynamicstruct "github.com/ompluscator/dynamic-struct"
+	gogitignore "github.com/sabhiram/go-gitignore"
 )
 
-func parseRouterMethod(openapi *openapi3.T, sourceFileName string, findMethodStatement string, route *router.Route, validationIdentifier func() []string) {
+type SearchIdentifier struct {
+	MethodStatement  []string
+	ArgumentPosition int
+}
+
+func parseRouterMethod(
+	openapi *openapi3.T,
+	sourceFileName string,
+	findMethodStatement string,
+	route *router.Route,
+	structsMapping map[string]map[string]*ast.TypeSpec,
+	searchIdentifiers []*SearchIdentifier,
+) {
+	if route.Method == http.MethodOptions {
+		return
+	}
+
 	fset := token.NewFileSet()
 	node, err := parser.ParseFile(fset, sourceFileName, nil, parser.ParseComments) // 1. parse AST for router source file
 	if err != nil {
@@ -30,41 +50,41 @@ func parseRouterMethod(openapi *openapi3.T, sourceFileName string, findMethodSta
 
 	operationName := fmt.Sprintf("[%s]%s", route.Method, strings.ReplaceAll(route.Path, "/", "-"))
 
-	// path
-	{
-		var item *openapi3.PathItem
-
-		if _, ok := openapi.Paths[route.Path]; ok {
-			item = openapi.Paths[route.Path]
-		} else {
-			item = &openapi3.PathItem{}
-		}
-
-		// TODO: response
-		pathOperation := &openapi3.Operation{
-			RequestBody: &openapi3.RequestBodyRef{
-				Ref: "#/components/requestBodies/" + operationName, // TODO: request someRequestBody
-				//Value: requestBody, // TODO: request body
-			},
-			// TODO: 200, 400, 404, 500
-			Responses: openapi3.NewResponses(),
-		}
-
-		switch route.Method {
-		case http.MethodGet:
-			item.Get = pathOperation
-		case http.MethodPost:
-			item.Post = pathOperation
-		case http.MethodPut:
-			item.Put = pathOperation
-		case http.MethodPatch:
-			item.Patch = pathOperation
-		case http.MethodDelete:
-			item.Delete = pathOperation
-		}
-
-		openapi.Paths[route.Path] = item
+	if operationName == debugOperationMethod {
+		fmt.Sprintf("d")
 	}
+
+	// path
+	var item *openapi3.PathItem
+
+	if _, ok := openapi.Paths[route.Path]; ok {
+		item = openapi.Paths[route.Path]
+	} else {
+		item = &openapi3.PathItem{}
+	}
+
+	pathOperation := &openapi3.Operation{
+		RequestBody: &openapi3.RequestBodyRef{
+			Ref: "#/components/requestBodies/" + operationName,
+		},
+		// TODO: 200, 400, 404, 500
+		Responses: openapi3.NewResponses(),
+	}
+
+	switch route.Method {
+	case http.MethodGet:
+		item.Get = pathOperation
+	case http.MethodPost:
+		item.Post = pathOperation
+	case http.MethodPut:
+		item.Put = pathOperation
+	case http.MethodPatch:
+		item.Patch = pathOperation
+	case http.MethodDelete:
+		item.Delete = pathOperation
+	}
+
+	openapi.Paths[route.Path] = item
 
 root:
 	for _, f := range node.Decls {
@@ -73,7 +93,6 @@ root:
 			continue
 		}
 
-		pkg := node.Name.Name
 		methodName := fn.Name.Name
 
 		if fn.Recv == nil || len(fn.Recv.List) <= 0 {
@@ -84,14 +103,19 @@ root:
 		for _, recv := range fn.Recv.List { // 4. list pointers
 			// TODO: support pointers and non pointers
 			if star, ok := recv.Type.(*ast.StarExpr); ok { // 5. check if pointer e.g *api
-				if ident, ok := star.X.(*ast.Ident); ok { // 6. get pointer name e.g "api"
-					structName := ident.Name
+				if _, ok := star.X.(*ast.Ident); ok { // 6. get pointer name e.g "api"
+					routerMethodMatchWithASTMethod := methodName == findMethodStatement // 7. check if ast method match with iris router method
 
-					join := strings.Join([]string{pkg, fmt.Sprintf("(*%s)", structName), methodName}, ".") //
-					routerMethodMatchWithASTMethod := join == findMethodStatement                          // 7. check if ast method match with iris router method
+					if operationName == debugOperationMethod {
+						fmt.Sprintf("d")
+					}
 
 					if !routerMethodMatchWithASTMethod {
 						continue
+					}
+
+					if operationName == debugOperationMethod {
+						fmt.Sprintf("d")
 					}
 
 					if fn.Body != nil && len(fn.Body.List) > 0 { // 8. check body - there should be request validation
@@ -106,7 +130,10 @@ root:
 								}
 
 								for _, rhs := range t.Rhs {
-									if parseHandlerBodyAST(operationName, validationIdentifier, rhs, openapi, route) {
+									if operationName == debugOperationMethod {
+										fmt.Sprintf("d")
+									}
+									if parseHandlerBodyAST(node, sourceFileName, structsMapping, operationName, searchIdentifiers, rhs, openapi, route) {
 										bodyParsed = true
 									}
 								}
@@ -121,12 +148,17 @@ root:
 								}
 
 								for _, rhs := range init.Rhs {
-									if parseHandlerBodyAST(operationName, validationIdentifier, rhs, openapi, route) {
+									if operationName == debugOperationMethod {
+										fmt.Sprintf("d")
+									}
+									if parseHandlerBodyAST(node, sourceFileName, structsMapping, operationName, searchIdentifiers, rhs, openapi, route) {
 										bodyParsed = true
 									}
 								}
 
+								// parse body
 							case *ast.ExprStmt: // TODO: response body, support 400, 404, 500 etc.
+								// TODO: response with responses structures in different packages and files
 								parseContextJSONStruct := func(compositeList *ast.CompositeLit) {
 									compositeTypIdent, ok := compositeList.Type.(*ast.Ident)
 									if !ok {
@@ -141,14 +173,16 @@ root:
 									responseBodyStruct := dynamicstruct.NewStruct()
 
 									if err := parseStruct(typeSpec, responseBodyStruct); err != nil {
-										panic(err)
+										log.Println(err)
+										return
 									}
 
 									requestBodyStructInstance := responseBodyStruct.Build().New()
 
 									schemaRef, _, err := openapi3gen.NewSchemaRefForValue(requestBodyStructInstance)
 									if err != nil {
-										panic(err)
+										log.Println(err)
+										return
 									}
 									responseJSON := openapi3.NewResponse().
 										WithJSONSchemaRef(schemaRef)
@@ -244,57 +278,177 @@ root:
 	}
 }
 
-func parseHandlerBodyAST(operationName string, validationIdentifier func() []string, exp ast.Expr, openapi *openapi3.T, route *router.Route) bool {
-	callExpresssions, match := matchCallExpression(validationIdentifier, exp) // 1. match call expression e.g a.baseController.ValidateBody(ctx, &req)
+func parseHandlerBodyAST(
+	node *ast.File,
+	sourceFileName string,
+	structsMapping map[string]map[string]*ast.TypeSpec,
+	operationName string,
+	searchIdentifiers []*SearchIdentifier,
+	exp ast.Expr,
+	openapi *openapi3.T,
+	route *router.Route,
+) bool {
+	callExpresssions, argumentPosition, match := matchCallExpression(operationName, searchIdentifiers, exp) // 1. match call expression e.g a.baseController.ValidateBody(ctx, &req)
+	if operationName == debugOperationMethod {
+		fmt.Sprintf("d")
+	}
 	if !match {
 		return false
 	}
 
+	if operationName == debugOperationMethod {
+		fmt.Sprintf("d")
+	}
+
 	// TODO: support non pointer request struct also
-	requestBodyPointer := callExpresssions.Args[1] // 2. get validation struct e.g a.baseController.ValidateBody(ctx, &req) -> &req
+	requestBodyArg := callExpresssions.Args[argumentPosition] // 2. get validation struct e.g a.baseController.ValidateBody(ctx, &req) || &req ctx.ValidateRequest(&req)
 
 	requestBodyStruct := dynamicstruct.NewStruct()
 
-	// parse body struct to swagger (comments, types, names, validation, json tags)
-	if pointer, ok := requestBodyPointer.(*ast.UnaryExpr); ok {
-		if ident, ok := pointer.X.(*ast.Ident); ok {
-			if valueSpec, ok := ident.Obj.Decl.(*ast.ValueSpec); ok {
-				if value, ok := valueSpec.Type.(*ast.Ident); ok {
+	//
+	parseRequestStructIdent := func(ident *ast.Ident) {
+		// TODO: strategy for in another file + in another package
+		if ident.Obj == nil {
+			sourceFileName = strings.ReplaceAll(sourceFileName, "./", "")
+			sourceDir, _ := filepath.Split(sourceFileName)
 
-					if typeSpec, ok := value.Obj.Decl.(*ast.TypeSpec); ok {
+			// TODO: dir mapping instead of loop all files
+			for mappingPath, structs := range structsMapping { // TODO: stategy for files outside current package
+				if mappingPath == sourceFileName {
+					continue
+				}
+
+				dir, _ := filepath.Split(mappingPath)
+
+				withinInnerPackage := sourceDir == dir
+
+				if withinInnerPackage {
+					if typeSpec, ok := structs[ident.Name]; ok && typeSpec != nil {
 						if err := parseStruct(typeSpec, requestBodyStruct); err != nil {
-							panic(err)
+							log.Println(err)
+							continue
+						}
+						break
+					}
+				}
+			}
+
+			return
+		}
+
+		if typeSpec, ok := ident.Obj.Decl.(*ast.TypeSpec); ok {
+			if err := parseStruct(typeSpec, requestBodyStruct); err != nil {
+				log.Println(err)
+				return
+			}
+		}
+	}
+
+	parsed := false
+	switch reqBody := requestBodyArg.(type) {
+	case *ast.UnaryExpr: //  if var req request
+		if operationName == debugOperationMethod {
+			fmt.Sprintf("d")
+		}
+		if ident, ok := reqBody.X.(*ast.Ident); ok {
+			if valueSpec, ok := ident.Obj.Decl.(*ast.ValueSpec); ok {
+				if ident, ok := valueSpec.Type.(*ast.Ident); ok {
+					parseRequestStructIdent(ident)
+					parsed = true
+				}
+			}
+		}
+	case *ast.Ident: //  if req := &request{}
+		if operationName == debugOperationMethod {
+			fmt.Sprintf("d")
+		}
+		if assign, ok := reqBody.Obj.Decl.(*ast.AssignStmt); ok {
+			if expr, ok := assign.Rhs[0].(*ast.UnaryExpr); ok {
+				if composeList, ok := expr.X.(*ast.CompositeLit); ok {
+					switch t := composeList.Type.(type) {
+					case *ast.Ident: // &req{}
+						parseRequestStructIdent(t)
+						parsed = true
+					case *ast.SelectorExpr: // &pkg.req{}
+					root:
+						for _, nodeImport := range node.Imports { // search struct inside imports
+							importName := ""
+
+							if nodeImport.Name != nil {
+								importName = nodeImport.Name.Name
+							}
+
+							nodeImportPath, _ := strconv.Unquote(nodeImport.Path.Value)
+							_, pkg := filepath.Split(nodeImportPath)
+
+							if importName == "" {
+								importName = pkg
+							}
+
+							ident, ok := t.X.(*ast.Ident)
+							if !ok {
+								continue
+							}
+
+							if importName != ident.Name {
+								continue
+							}
+
+							// TODO: dir mapping instead of loop all files
+							for mappingPath, structs := range structsMapping {
+								mappingDir, _ := filepath.Split(mappingPath)
+
+								if strings.HasSuffix(mappingDir, "/") {
+									mappingDir = mappingDir[:len(mappingDir)-1]
+								}
+								if !strings.HasSuffix(nodeImportPath, mappingDir) {
+									continue
+								}
+
+								if typeSpec, ok := structs[t.Sel.Name]; ok && typeSpec != nil {
+									if err := parseStruct(typeSpec, requestBodyStruct); err != nil {
+										log.Println(err)
+										continue
+									}
+									parsed = true
+									break root
+								}
+							}
 						}
 					}
 				}
 			}
 		}
-
-		requestBodyStructInstance := requestBodyStruct.Build().New()
-
-		schemaRef, _, err := openapi3gen.NewSchemaRefForValue(requestBodyStructInstance)
-		if err != nil {
-			panic(err)
-		}
-
-		requestBody := openapi3.NewRequestBody().
-			WithJSONSchemaRef(schemaRef)
-
-		// TODO: someRequestBody
-		// request body ref
-		openapi.Components.RequestBodies[operationName] = &openapi3.RequestBodyRef{
-			Value: requestBody,
-		}
-
-		operation := openAPIOperationByMethod(openapi.Paths[route.Path], route.Method)
-
-		if operation == nil {
-			log.Fatalf("operation not found, [path=%s, method=%s]", route.Path, route.Method)
-			return false
-		}
-
-		operation.RequestBody.Value = requestBody
 	}
+
+	if !parsed {
+		return false
+	}
+
+	requestBodyStructInstance := requestBodyStruct.Build().New()
+
+	schemaRef, _, err := openapi3gen.NewSchemaRefForValue(requestBodyStructInstance)
+	if err != nil {
+		panic(err)
+	}
+
+	requestBody := openapi3.NewRequestBody().
+		WithJSONSchemaRef(schemaRef)
+
+	// TODO: someRequestBody
+	// request body ref
+	openapi.Components.RequestBodies[operationName] = &openapi3.RequestBodyRef{
+		Value: requestBody,
+	}
+
+	operation := openAPIOperationByMethod(openapi.Paths[route.Path], route.Method)
+
+	if operation == nil {
+		log.Println("operation not found, [path=%s, method=%s]", route.Path, route.Method)
+		return false
+	}
+
+	operation.RequestBody.Value = requestBody
 
 	// parse body argument
 
@@ -309,7 +463,9 @@ func parseStruct(typeSpec *ast.TypeSpec, structBuilder dynamicstruct.Builder) er
 	}
 
 	for _, field := range structSpec.Fields.List {
-
+		if field.Tag == nil {
+			continue
+		}
 		tags, err := structtag.Parse(strings.ReplaceAll(field.Tag.Value, "`", ""))
 		if err != nil {
 			return err
@@ -335,4 +491,246 @@ func parseStruct(typeSpec *ast.TypeSpec, structBuilder dynamicstruct.Builder) er
 	}
 
 	return nil
+}
+
+func matchCallExpression(operationName string, searchIdentifiers []*SearchIdentifier, exp ast.Expr) (callExpr *ast.CallExpr, foundArgumentPosition int, found bool) {
+	var selectorExpr *ast.SelectorExpr
+
+	if operationName == debugOperationMethod {
+		fmt.Sprintf("d")
+	}
+
+	call, ok := exp.(*ast.CallExpr)
+
+	if !ok {
+		return
+	}
+
+	selectorExpr, ok = call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return
+	}
+
+	//selectorExpr = s
+	//
+	//if callOk {
+	//
+	//	return
+	//} else {
+	//	composeList, ok := exp.(*ast.CompositeLit)
+	//	if !ok {
+	//		return
+	//	}
+	//
+	//	s, ok := composeList.Type.(*ast.SelectorExpr)
+	//	if !ok {
+	//		return
+	//	}
+	//
+	//	selectorExpr = s
+	//}
+
+	if operationName == debugOperationMethod {
+		fmt.Sprintf("d")
+	}
+
+	for _, identifier := range searchIdentifiers {
+		ids := make([]string, len(identifier.MethodStatement))
+		copy(ids, identifier.MethodStatement)
+
+		reverseSliceString(ids)
+
+		expect := len(ids)
+		current := 0
+
+		for i, id := range ids {
+			nextId := ""
+
+			if len(ids)-1 >= i+1 {
+				nextId = ids[i+1]
+			}
+
+			if selectorExpr.Sel.Name != id {
+				break
+			}
+
+			current++
+
+			switch t := selectorExpr.X.(type) {
+			case *ast.CallExpr:
+				if s, ok := t.Fun.(*ast.SelectorExpr); ok {
+					selectorExpr = s
+				}
+			case *ast.SelectorExpr:
+				selectorExpr = t
+			case *ast.Ident:
+				if t.Obj == nil {
+					selectorExpr = &ast.SelectorExpr{ // hack for method expression e.g  ["iris", "Context", "ReadJSON"] => ctx.ReadJSON
+						Sel: &ast.Ident{
+							Name: t.Name,
+						},
+					}
+
+					continue
+				}
+
+				field, ok := t.Obj.Decl.(*ast.Field)
+				if !ok {
+					continue
+				}
+
+				s, ok := field.Type.(*ast.SelectorExpr)
+				if ok {
+					selectorExpr = s
+					continue
+				}
+
+				starExpr, ok := field.Type.(*ast.StarExpr)
+				if !ok {
+					continue
+				}
+
+				ident, ok := starExpr.X.(*ast.Ident)
+				if !ok {
+					continue
+				}
+
+				typeSpec, ok := ident.Obj.Decl.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+
+				structType, ok := typeSpec.Type.(*ast.StructType)
+				if !ok {
+					continue
+				}
+
+				for _, field := range structType.Fields.List {
+					switch t := field.Type.(type) {
+					case *ast.StarExpr: // if pointer e.g *baseController
+						ptr, ok := field.Type.(*ast.StarExpr)
+						if !ok {
+							continue
+						}
+
+						ident, ok := ptr.X.(*ast.Ident)
+						if !ok {
+							continue
+						}
+
+						if operationName == debugOperationMethod {
+							fmt.Sprintf("d")
+						}
+
+						if ident.Name != nextId {
+							continue
+						}
+
+						selectorExpr = &ast.SelectorExpr{ // hack for method shortcut e.g api.BaseController.Abc() and api.Abc()
+							Sel: &ast.Ident{
+								Name: ident.Name,
+							},
+						}
+
+						break
+					case *ast.Ident: // if interface e.g BaseController
+						if operationName == debugOperationMethod {
+							fmt.Sprintf("d")
+						}
+
+						if t.Name != nextId {
+							continue
+						}
+
+						if operationName == debugOperationMethod {
+							fmt.Sprintf("d")
+						}
+
+						selectorExpr = &ast.SelectorExpr{ // hack for method shortcut e.g api.BaseController.Abc() and api.Abc()
+							Sel: &ast.Ident{
+								Name: t.Name,
+							},
+						}
+
+						break
+					}
+
+				}
+			}
+		}
+
+		if expect == current {
+			return call, identifier.ArgumentPosition, true
+		}
+	}
+
+	return
+}
+
+func mapStructsFromFiles(root string) (map[string]map[string]*ast.TypeSpec, error) {
+	walkRook := "."
+	if root != "" {
+		walkRook = root
+	}
+
+	ignored, err := gogitignore.CompileIgnoreFile("./gitignore")
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+
+	// per file path, per struct name
+	out := make(map[string]map[string]*ast.TypeSpec)
+
+	// TODO: pass root folder to omit every folder checking
+	return out, filepath.Walk(walkRook, func(path string, f os.FileInfo, err error) error {
+		if ignored != nil {
+			if ignored.MatchesPath(path) {
+				return filepath.SkipDir
+			}
+		}
+
+		// TODO: respect .gitignore
+		switch path {
+		case ".git":
+			return filepath.SkipDir
+		}
+
+		// TODO: omit <name>_test.go
+		if filepath.Ext(path) != ".go" {
+			return nil
+		}
+
+		if root != "" {
+			if is, _ := isSubPath(root, path); !is {
+				return nil
+			}
+		}
+
+		fset := token.NewFileSet()
+		node, err := parser.ParseFile(fset, path, nil, parser.ParseComments) // 1. parse AST for router source file
+		if err != nil {
+			return err
+		}
+
+		// TODO: check if absolute - if yes remove prefix  ~/Code/zdunecki -> prefix
+
+		if _, ok := out[path]; !ok {
+			out[path] = make(map[string]*ast.TypeSpec)
+		}
+
+		if node.Scope != nil {
+			for _, v := range node.Scope.Objects {
+				typeSpec, ok := v.Decl.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+
+				if _, ok := out[path][typeSpec.Name.Name]; !ok {
+					out[path][typeSpec.Name.Name] = typeSpec
+				}
+			}
+		}
+
+		return nil
+	})
 }

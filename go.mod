@@ -1,4 +1,4 @@
-module restflix
+module github.com/zdunecki/restflix
 
 go 1.13
 
@@ -16,6 +16,7 @@ require (
 	github.com/moul/http2curl v1.0.0 // indirect
 	github.com/ompluscator/dynamic-struct v1.3.0
 	github.com/onsi/gomega v1.16.0 // indirect
+	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
 	github.com/sergi/go-diff v1.2.0 // indirect
 	github.com/shurcooL/sanitized_anchor_name v1.0.0 // indirect
 	github.com/smartystreets/goconvey v1.6.4 // indirect
@@ -26,4 +27,5 @@ require (
 	github.com/yudai/gojsondiff v1.0.0 // indirect
 	github.com/yudai/golcs v0.0.0-20170316035057-ecda9a501e82 // indirect
 	github.com/yudai/pp v2.0.1+incompatible // indirect
+
 )
