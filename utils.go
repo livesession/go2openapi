@@ -33,7 +33,7 @@ func reverseSliceString(s []string) {
 }
 
 // TODO: pointers
-func getType(typ string) interface{} {
+func getTypeDefaultValue(typ string) interface{} {
 	switch typ {
 	case "string":
 		return ""

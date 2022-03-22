@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/fatih/structtag"
 	"github.com/getkin/kin-openapi/openapi3"
@@ -159,9 +158,63 @@ root:
 								// parse body
 							case *ast.ExprStmt: // TODO: response body, support 400, 404, 500 etc.
 								// TODO: response with responses structures in different packages and files
-								parseContextJSONStruct := func(compositeList *ast.CompositeLit) {
+								parseContextJSONStruct := func(structsMapping map[string]map[string]*ast.TypeSpec, compositeList *ast.CompositeLit) {
+									if operationName == debugOperationMethod {
+										fmt.Sprintf("d")
+									}
 									compositeTypIdent, ok := compositeList.Type.(*ast.Ident)
 									if !ok {
+										if compositeList.Elts == nil { // parse custom map
+											return
+										}
+
+										out := make(map[string]interface{})
+
+										for _, elt := range compositeList.Elts {
+											kv, ok := elt.(*ast.KeyValueExpr)
+											if !ok {
+												continue
+											}
+
+											key := ""
+											if k, ok := kv.Key.(*ast.BasicLit); !ok {
+												continue
+											} else {
+												key = k.Value
+											}
+
+											ident, ok := kv.Value.(*ast.Ident)
+											if !ok {
+												continue
+											}
+
+											if ident.Obj == nil {
+												continue
+											}
+
+											valueSpec, ok := ident.Obj.Decl.(*ast.ValueSpec)
+											if !ok {
+												continue
+											}
+											// TODO: arrays and non arrays
+
+											switch t := valueSpec.Type.(type) {
+											case *ast.ArrayType:
+												selector, ok := t.Elt.(*ast.SelectorExpr)
+												if ok {
+													builder := dynamicstruct.NewStruct()
+													parseStructFromOutside(selector, node, structsMapping, builder)
+													if operationName == debugOperationMethod {
+														fmt.Sprintf("d")
+													}
+												}
+											case *ast.Ident:
+
+											}
+											//valueSpec.Type.(*ast.ArrayType)
+											fmt.Println(key, ident, out)
+										}
+
 										return
 									}
 
@@ -243,10 +296,14 @@ root:
 									continue
 								}
 
+								if operationName == debugOperationMethod {
+									fmt.Sprintf("d")
+								}
+
 								argIdent, ok := call.Args[0].(*ast.Ident) // ctx.JSON(resp)
 								if !ok {
 									if compositeList, ok := call.Args[0].(*ast.CompositeLit); ok { // if ctx.JSON(&Struct{})
-										parseContextJSONStruct(compositeList)
+										parseContextJSONStruct(structsMapping, compositeList)
 									}
 									continue
 								}
@@ -267,7 +324,7 @@ root:
 									continue
 								}
 
-								parseContextJSONStruct(compositeList)
+								parseContextJSONStruct(structsMapping, compositeList)
 							}
 						}
 					}
@@ -305,47 +362,9 @@ func parseHandlerBodyAST(
 
 	requestBodyStruct := dynamicstruct.NewStruct()
 
-	//
-	parseRequestStructIdent := func(ident *ast.Ident) {
-		// TODO: strategy for in another file + in another package
-		if ident.Obj == nil {
-			sourceFileName = strings.ReplaceAll(sourceFileName, "./", "")
-			sourceDir, _ := filepath.Split(sourceFileName)
-
-			// TODO: dir mapping instead of loop all files
-			for mappingPath, structs := range structsMapping { // TODO: stategy for files outside current package
-				if mappingPath == sourceFileName {
-					continue
-				}
-
-				dir, _ := filepath.Split(mappingPath)
-
-				withinInnerPackage := sourceDir == dir
-
-				if withinInnerPackage {
-					if typeSpec, ok := structs[ident.Name]; ok && typeSpec != nil {
-						if err := parseStruct(typeSpec, requestBodyStruct); err != nil {
-							log.Println(err)
-							continue
-						}
-						break
-					}
-				}
-			}
-
-			return
-		}
-
-		if typeSpec, ok := ident.Obj.Decl.(*ast.TypeSpec); ok {
-			if err := parseStruct(typeSpec, requestBodyStruct); err != nil {
-				log.Println(err)
-				return
-			}
-		}
-	}
-
 	parsed := false
 	switch reqBody := requestBodyArg.(type) {
+	// TODO: var req pkg.request
 	case *ast.UnaryExpr: //  if var req request
 		if operationName == debugOperationMethod {
 			fmt.Sprintf("d")
@@ -353,7 +372,7 @@ func parseHandlerBodyAST(
 		if ident, ok := reqBody.X.(*ast.Ident); ok {
 			if valueSpec, ok := ident.Obj.Decl.(*ast.ValueSpec); ok {
 				if ident, ok := valueSpec.Type.(*ast.Ident); ok {
-					parseRequestStructIdent(ident)
+					parseRequestStructIdentWithinPackage(ident, sourceFileName, structsMapping, requestBodyStruct)
 					parsed = true
 				}
 			}
@@ -367,53 +386,11 @@ func parseHandlerBodyAST(
 				if composeList, ok := expr.X.(*ast.CompositeLit); ok {
 					switch t := composeList.Type.(type) {
 					case *ast.Ident: // &req{}
-						parseRequestStructIdent(t)
+						parseRequestStructIdentWithinPackage(t, sourceFileName, structsMapping, requestBodyStruct)
 						parsed = true
 					case *ast.SelectorExpr: // &pkg.req{}
-					root:
-						for _, nodeImport := range node.Imports { // search struct inside imports
-							importName := ""
-
-							if nodeImport.Name != nil {
-								importName = nodeImport.Name.Name
-							}
-
-							nodeImportPath, _ := strconv.Unquote(nodeImport.Path.Value)
-							_, pkg := filepath.Split(nodeImportPath)
-
-							if importName == "" {
-								importName = pkg
-							}
-
-							ident, ok := t.X.(*ast.Ident)
-							if !ok {
-								continue
-							}
-
-							if importName != ident.Name {
-								continue
-							}
-
-							// TODO: dir mapping instead of loop all files
-							for mappingPath, structs := range structsMapping {
-								mappingDir, _ := filepath.Split(mappingPath)
-
-								if strings.HasSuffix(mappingDir, "/") {
-									mappingDir = mappingDir[:len(mappingDir)-1]
-								}
-								if !strings.HasSuffix(nodeImportPath, mappingDir) {
-									continue
-								}
-
-								if typeSpec, ok := structs[t.Sel.Name]; ok && typeSpec != nil {
-									if err := parseStruct(typeSpec, requestBodyStruct); err != nil {
-										log.Println(err)
-										continue
-									}
-									parsed = true
-									break root
-								}
-							}
+						if updated := parseStructFromOutside(t, node, structsMapping, requestBodyStruct); updated {
+							parsed = true
 						}
 					}
 				}
@@ -444,7 +421,7 @@ func parseHandlerBodyAST(
 	operation := openAPIOperationByMethod(openapi.Paths[route.Path], route.Method)
 
 	if operation == nil {
-		log.Println("operation not found, [path=%s, method=%s]", route.Path, route.Method)
+		log.Printf("operation not found, [path=%s, method=%s]", route.Path, route.Method)
 		return false
 	}
 
@@ -453,6 +430,91 @@ func parseHandlerBodyAST(
 	// parse body argument
 
 	return true
+}
+
+func parseRequestStructIdentWithinPackage(ident *ast.Ident, sourceFileName string, structsMapping map[string]map[string]*ast.TypeSpec, structBuilder dynamicstruct.Builder) {
+	if ident.Obj == nil { // strategy for in another file
+		sourceFileName = strings.ReplaceAll(sourceFileName, "./", "")
+		sourceDir, _ := filepath.Split(sourceFileName)
+
+		// TODO: dir mapping instead of loop all files
+		for mappingPath, structs := range structsMapping {
+			if mappingPath == sourceFileName {
+				continue
+			}
+
+			dir, _ := filepath.Split(mappingPath)
+
+			withinInnerPackage := sourceDir == dir
+
+			if withinInnerPackage {
+				if typeSpec, ok := structs[ident.Name]; ok && typeSpec != nil {
+					if err := parseStruct(typeSpec, structBuilder); err != nil {
+						log.Println(err)
+						continue
+					}
+					break
+				}
+			}
+		}
+
+		return
+	}
+
+	if typeSpec, ok := ident.Obj.Decl.(*ast.TypeSpec); ok {
+		if err := parseStruct(typeSpec, structBuilder); err != nil {
+			log.Println(err)
+			return
+		}
+	}
+}
+
+func parseStructFromOutside(selector *ast.SelectorExpr, node *ast.File, structsMapping map[string]map[string]*ast.TypeSpec, structBuilder dynamicstruct.Builder) bool {
+	for _, nodeImport := range node.Imports { // search struct inside imports
+		importName := ""
+
+		if nodeImport.Name != nil {
+			importName = nodeImport.Name.Name
+		}
+
+		nodeImportPath, _ := strconv.Unquote(nodeImport.Path.Value)
+		_, pkg := filepath.Split(nodeImportPath)
+
+		if importName == "" {
+			importName = pkg
+		}
+
+		ident, ok := selector.X.(*ast.Ident)
+		if !ok {
+			continue
+		}
+
+		if importName != ident.Name {
+			continue
+		}
+
+		// TODO: dir mapping instead of loop all files
+		for mappingPath, structs := range structsMapping { // strategy for in another pkg
+			mappingDir, _ := filepath.Split(mappingPath)
+
+			if strings.HasSuffix(mappingDir, "/") {
+				mappingDir = mappingDir[:len(mappingDir)-1]
+			}
+			if !strings.HasSuffix(nodeImportPath, mappingDir) {
+				continue
+			}
+
+			if typeSpec, ok := structs[selector.Sel.Name]; ok && typeSpec != nil {
+				if err := parseStruct(typeSpec, structBuilder); err != nil {
+					log.Println(err)
+					continue
+				}
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 func parseStruct(typeSpec *ast.TypeSpec, structBuilder dynamicstruct.Builder) error {
@@ -478,15 +540,19 @@ func parseStruct(typeSpec *ast.TypeSpec, structBuilder dynamicstruct.Builder) er
 
 		if f, ok := field.Type.(*ast.Ident); ok {
 			name := field.Names[0].Name // TODO: [0] is ok? why its an array
-			structBuilder.AddField(name, getType(f.Name), fmt.Sprintf(`json:"%s"`, tag.Name))
+			structBuilder.AddField(name, getTypeDefaultValue(f.Name), fmt.Sprintf(`json:"%s"`, tag.Name))
 		} else if f, ok := field.Type.(*ast.SelectorExpr); ok {
 			x := f.X.(*ast.Ident)
 
-			switch t := getType(x.Name).(type) {
-			case *time.Time:
-				name := field.Names[0].Name
-				structBuilder.AddField(name, t, fmt.Sprintf(`json:"%s"`, tag.Name))
-			}
+			// TODO: check if it works
+			name := field.Names[0].Name
+			structBuilder.AddField(name, getTypeDefaultValue(x.Name), fmt.Sprintf(`json:"%s"`, tag.Name))
+
+			//switch t := getTypeDefaultValue(x.Name).(type) {
+			//case *time.Time:
+			//	name := field.Names[0].Name
+			//	structBuilder.AddField(name, t, fmt.Sprintf(`json:"%s"`, tag.Name))
+			//}
 		}
 	}
 
@@ -733,4 +799,222 @@ func mapStructsFromFiles(root string) (map[string]map[string]*ast.TypeSpec, erro
 
 		return nil
 	})
+}
+
+type astSchemaEncoder struct {
+	node           *ast.File
+	structsMapping map[string]map[string]*ast.TypeSpec
+	sourceFileName string
+}
+
+// TODO: search within package / another packages
+func (encoder *astSchemaEncoder) astToSchemaRef(expr ast.Expr) (*openapi3.SchemaRef, error) {
+	var schemaRefFromStructField func(field *ast.Field) (*openapi3.SchemaRef, string, error)
+	properties := make(openapi3.Schemas) // TODO: not always properties - sometimes primitive types or array of structs
+
+	schemaRef := func(ident *ast.Ident) *openapi3.SchemaRef {
+		return &openapi3.SchemaRef{
+			Ref: "",
+			Value: &openapi3.Schema{
+				Type:    ident.Name,
+				Example: getTypeDefaultValue(ident.Name),
+			},
+		}
+	}
+
+	schemaRefArray := func(ident *ast.Ident) *openapi3.SchemaRef {
+		return &openapi3.SchemaRef{
+			Ref: "",
+			Value: &openapi3.Schema{
+				Type:  "array",
+				Items: schemaRef(ident),
+			},
+		}
+	}
+
+	schemaRefArrayOfObject := func(props openapi3.Schemas) *openapi3.SchemaRef {
+		return &openapi3.SchemaRef{
+			Ref: "",
+			Value: &openapi3.Schema{
+				Type: "array",
+				Items: &openapi3.SchemaRef{
+					Ref: "",
+					Value: &openapi3.Schema{
+						Type:       "object",
+						Properties: props,
+					},
+				},
+			},
+		}
+	}
+
+	schemaRefFromStructField = func(field *ast.Field) (*openapi3.SchemaRef, string, error) {
+		if field.Tag == nil {
+			return nil, "", nil
+		}
+		tags, err := structtag.Parse(strings.ReplaceAll(field.Tag.Value, "`", ""))
+		if err != nil {
+			return nil, "", err
+		}
+
+		tag, err := tags.Get("json")
+		if err != nil {
+			return nil, "", err
+		}
+
+		switch t := field.Type.(type) {
+		case *ast.Ident:
+			if ref, _ := encoder.astToSchemaRefWithinPackage(t); ref != nil {
+				return ref, tag.Name, err
+			}
+
+			return schemaRef(t), tag.Name, nil
+		case *ast.SelectorExpr:
+			if ref, _ := encoder.astToSchemaOutsidePackage(t); ref != nil {
+				return ref, tag.Name, err
+			}
+
+			ident := t.X.(*ast.Ident)
+
+			if ref, _ := encoder.astToSchemaRefWithinPackage(ident); ref != nil {
+				return ref, tag.Name, err
+			}
+
+			return schemaRef(ident), tag.Name, nil
+		case *ast.ArrayType:
+			ident := t.Elt.(*ast.Ident)
+			if ident.Obj != nil { // it's struct
+				typeSpec := ident.Obj.Decl.(*ast.TypeSpec)
+				nestedSechemaRef, err := encoder.astToSchemaRef(typeSpec.Type)
+
+				if err != nil {
+					return nil, "", err
+				}
+
+				return schemaRefArrayOfObject(nestedSechemaRef.Value.Properties), tag.Name, nil
+			} else {
+				return schemaRefArray(ident), tag.Name, nil
+			}
+		}
+
+		return nil, "", nil
+	}
+
+	switch t := expr.(type) {
+	case *ast.StructType:
+		for _, field := range t.Fields.List {
+			ref, name, err := schemaRefFromStructField(field)
+			if err != nil {
+				return nil, err
+			}
+
+			if ref != nil {
+				properties[name] = ref
+			}
+		}
+	case *ast.ArrayType:
+		ident := t.Elt.(*ast.Ident)
+		if ident.Obj != nil { // it's struct
+			typeSpec := ident.Obj.Decl.(*ast.TypeSpec)
+			nestedSechemaRef, err := encoder.astToSchemaRef(typeSpec.Type)
+
+			if err != nil {
+				return nil, err
+			}
+
+			ref := schemaRefArrayOfObject(nestedSechemaRef.Value.Properties)
+
+			if ref != nil {
+				properties[ident.Name] = ref
+			}
+		} else {
+			ref := schemaRefArray(ident)
+
+			if ref != nil {
+				properties[ident.Name] = ref
+			}
+		}
+	}
+
+	return &openapi3.SchemaRef{
+		Value: &openapi3.Schema{
+			Properties: properties,
+		},
+	}, nil
+}
+
+func (encoder astSchemaEncoder) astToSchemaOutsidePackage(selector *ast.SelectorExpr) (*openapi3.SchemaRef, error) {
+	for _, nodeImport := range encoder.node.Imports { // search struct inside imports
+		importName := ""
+
+		if nodeImport.Name != nil {
+			importName = nodeImport.Name.Name
+		}
+
+		nodeImportPath, _ := strconv.Unquote(nodeImport.Path.Value)
+		_, pkg := filepath.Split(nodeImportPath)
+
+		if importName == "" {
+			importName = pkg
+		}
+
+		ident, ok := selector.X.(*ast.Ident)
+		if !ok {
+			continue
+		}
+
+		if importName != ident.Name {
+			continue
+		}
+
+		// TODO: dir mapping instead of loop all files
+		for mappingPath, structs := range encoder.structsMapping { // strategy for in another pkg
+			mappingDir, _ := filepath.Split(mappingPath)
+
+			if strings.HasSuffix(mappingDir, "/") {
+				mappingDir = mappingDir[:len(mappingDir)-1]
+			}
+			if !strings.HasSuffix(nodeImportPath, mappingDir) {
+				continue
+			}
+
+			if typeSpec, ok := structs[selector.Sel.Name]; ok && typeSpec != nil {
+				return encoder.astToSchemaRef(typeSpec.Type)
+			}
+		}
+	}
+
+	return nil, nil
+}
+
+func (encoder astSchemaEncoder) astToSchemaRefWithinPackage(ident *ast.Ident) (*openapi3.SchemaRef, error) {
+	if ident.Obj == nil { // strategy for in another file
+		sourceFileName := strings.ReplaceAll(encoder.sourceFileName, "./", "")
+		sourceDir, _ := filepath.Split(sourceFileName)
+
+		// TODO: dir mapping instead of loop all files
+		for mappingPath, structs := range encoder.structsMapping {
+			if mappingPath == sourceFileName {
+				continue
+			}
+
+			dir, _ := filepath.Split(mappingPath)
+
+			withinInnerPackage := sourceDir == dir
+
+			if withinInnerPackage {
+				if typeSpec, ok := structs[ident.Name]; ok && typeSpec != nil {
+					return encoder.astToSchemaRef(typeSpec.Type)
+				}
+			}
+		}
+
+		return nil, nil
+	}
+
+	if typeSpec, ok := ident.Obj.Decl.(*ast.TypeSpec); ok {
+		return encoder.astToSchemaRef(typeSpec.Type)
+	}
+
+	return nil, nil
 }
