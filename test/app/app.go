@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/kataras/iris/v12"
@@ -55,6 +56,8 @@ type api struct {
 	//*baseController
 	//xd string
 	BaseController
+	model        Model
+	modelOutside objects2.Model
 }
 
 func middleware(ctx context.Context) {
@@ -67,27 +70,30 @@ func Init() {
 	a := &api{
 		//baseController: NewBaseController(),
 		BaseController: NewBaseController2(),
+		model:          newModel(),
+		modelOutside:   objects2.NewModel(),
 	}
 
-	app.Put("/test-basecontroller/{id:uint64}", a.testBaseController)
-	app.Post("/test-basecontroller-shortcut/{id:uint64}", a.testBaseControllerShortcut)
-	app.Post("/test-basecontroller-ctx-read-json/{id:uint64}", a.testBaseControllerCtxReadJson)
-	app.Get("/test-ctx-json-struct/{id:uint64}", a.testCtxJsonStruct)
-	app.Delete("/test-ctx-json-variable/{id:uint64}", a.testCtxJsonVariable)
-	app.Delete("/test-basecontroller-request-struct-in-variable/{id:uint64}", a.testBaseControllerRequestStructInVariable)
-	app.Delete("/test-basecontroller-request-struct-in-different-file/{id:uint64}", a.testBaseControllerRequestStructInDifferentFile)
-	app.Delete("/test-basecontroller-request-struct-in-different-file-and-package/{id:uint64}", a.testBaseControllerRequestStructInDifferentFileAndPackage) // TODO:
-	app.Delete(
-		"/test-basecontroller-middleware/{id:uint64}",
-		middleware,
-		a.testBaseControllerMiddleware,
-	) // TODO:
-	app.Delete("/test-basecontroller-request-struct-nested/{id:uint64}", a.testBaseControllerRequestStructNested)            // TODO:
-	app.Delete("/test-basecontroller-request-struct-map-response/{id:uint64}", a.testBaseControllerRequestStructMapResponse) // TODO:
+	//app.Put("/test-basecontroller/{id:uint64}", a.testBaseController)
+	//app.Post("/test-basecontroller-shortcut/{id:uint64}", a.testBaseControllerShortcut)
+	//app.Post("/test-basecontroller-ctx-read-json/{id:uint64}", a.testBaseControllerCtxReadJson)
+	//app.Get("/test-ctx-json-struct/{id:uint64}", a.testCtxJsonStruct)
+	//app.Delete("/test-ctx-json-variable/{id:uint64}", a.testCtxJsonVariable)
+	//app.Delete("/test-basecontroller-request-struct-in-variable/{id:uint64}", a.testBaseControllerRequestStructInVariable)
+	//app.Delete("/test-basecontroller-request-struct-in-different-file/{id:uint64}", a.testBaseControllerRequestStructInDifferentFile)
+	//app.Delete("/test-basecontroller-request-struct-in-different-file-and-package/{id:uint64}", a.testBaseControllerRequestStructInDifferentFileAndPackage)
+	//app.Delete(
+	//	"/test-basecontroller-middleware/{id:uint64}",
+	//	middleware,
+	//	a.testBaseControllerMiddleware,
+	//) // TODO:
+	//app.Delete("/test-basecontroller-request-struct-nested/{id:uint64}", a.testBaseControllerRequestStructNested)
+	//app.Delete("/test-basecontroller-request-struct-map-response/{id:uint64}", a.testBaseControllerRequestStructMapResponse)
+	app.Delete("/test-basecontroller-request-struct-method-response/{id:uint64}", a.testBaseControllerRequestStructMetodResponse)
 
 	//routes := app.APIBuilder.GetRoutes()
 	fmt.Println(app.APIBuilder.GetRoutes()[0].MainHandlerName)
-	app.Listen(":8080")
+	app.Listen(":9090")
 }
 
 func (a *api) testBaseController(ctx iris.Context) {
@@ -244,4 +250,25 @@ func (a *api) testBaseControllerRequestStructMapResponse(ctx iris.Context) {
 		"outside_package_struct":     objects2.ExampleStructInOtherFileAndPackage{},
 		"outside_package_struct_arr": []*objects2.ExampleStructInOtherFileAndPackage{},
 	})
+}
+
+func (a *api) testBaseControllerRequestStructMetodResponse(ctx iris.Context) {
+	resp, err := a.model.GetSomething()
+	if err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		return
+	}
+
+	x := 10
+	if x != 0 {
+		fmt.Println(x)
+	}
+
+	example()
+
+	ctx.JSON(resp)
+}
+
+func example() {
+
 }

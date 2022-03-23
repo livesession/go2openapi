@@ -151,6 +151,10 @@ root:
 									continue
 								}
 
+								if operationName == debugOperationMethod {
+									fmt.Sprintf("d")
+								}
+
 								init, ok := t.Init.(*ast.AssignStmt) // 11. and then check assign (inside if)
 								if !ok || init.Rhs == nil {
 									continue
@@ -167,6 +171,10 @@ root:
 
 								// parse response body
 							case *ast.ExprStmt: // TODO: response body, support 400, 404, 500 etc.
+								if operationName == debugOperationMethod {
+									fmt.Sprintf("d")
+								}
+
 								if parseHandlerResponseAST(node, structsMapping, sourceFileName, t.X, operationName, openapi, route) {
 									responseParsed = true
 								}
@@ -311,6 +319,10 @@ func parseHandlerResponseAST(
 		return true
 	}
 
+	if operationName == debugOperationMethod {
+		fmt.Sprintf("d")
+	}
+
 	call, ok := exp.(*ast.CallExpr)
 	if !ok {
 		return false
@@ -360,15 +372,18 @@ func parseHandlerResponseAST(
 		fmt.Sprintf("d")
 	}
 
-	argIdent, ok := call.Args[0].(*ast.Ident) // ctx.JSON(resp)
+	argIdent, ok := call.Args[0].(*ast.Ident)
 	if !ok {
-		if compositeList, ok := call.Args[0].(*ast.CompositeLit); ok { // if ctx.JSON(&Struct{})
-			return parseContextJSONStruct(structsMapping, compositeList)
+		switch t := call.Args[0].(type) {
+		case *ast.CompositeLit:
+			return parseContextJSONStruct(structsMapping, t)
+		case *ast.UnaryExpr:
+			if compositeList, ok := t.X.(*ast.CompositeLit); ok { // if ctx.JSON(&Struct{})
+				return parseContextJSONStruct(structsMapping, compositeList)
+			}
+			return false
 		}
-		return false
 	}
-
-	// else ctx.JSON(&variable)
 
 	assignStmt, ok := argIdent.Obj.Decl.(*ast.AssignStmt)
 	if !ok {
@@ -379,12 +394,25 @@ func parseHandlerResponseAST(
 		return false
 	}
 
-	compositeList, ok := assignStmt.Rhs[0].(*ast.CompositeLit)
-	if !ok {
-		return false
+	if operationName == debugOperationMethod {
+		fmt.Sprintf("d")
 	}
 
-	return parseContextJSONStruct(structsMapping, compositeList)
+	switch t := assignStmt.Rhs[0].(type) {
+	case *ast.CompositeLit:
+		return parseContextJSONStruct(structsMapping, t)
+	case *ast.UnaryExpr:
+		compositeList, ok := t.X.(*ast.CompositeLit)
+		if !ok {
+			return false
+		}
+
+		return parseContextJSONStruct(structsMapping, compositeList)
+	case *ast.CallExpr:
+		astMethodToSchemaRef(node, sourceFileName, t)
+	}
+
+	return false
 }
 
 func matchCallExpression(operationName string, searchIdentifiers []*SearchIdentifier, exp ast.Expr) (callExpr *ast.CallExpr, foundArgumentPosition int, found bool) {
@@ -616,6 +644,136 @@ type astSchemaEncoder struct {
 	sourceFileName string
 }
 
+func getImportPkgName(nodeImport *ast.ImportSpec) (importName, importPath string) {
+	if nodeImport.Name != nil {
+		importName = nodeImport.Name.Name
+	}
+
+	importPath, _ = strconv.Unquote(nodeImport.Path.Value)
+
+	if importName == "" {
+		_, importName = filepath.Split(importPath)
+	}
+
+	return
+}
+
+// TODO: inside pkg, outside pkg, interfaces, structs
+func astMethodToSchemaRef(node *ast.File, sourceFileName string, callExpr *ast.CallExpr) {
+	switch t := callExpr.Fun.(type) {
+	case *ast.SelectorExpr:
+		funSelector, ok := t.X.(*ast.SelectorExpr)
+		if !ok {
+			return
+		}
+
+		structRef := funSelector.X
+		refName := funSelector.Sel.Name
+
+		ident, ok := structRef.(*ast.Ident)
+		if !ok {
+			return
+		}
+
+		field, ok := ident.Obj.Decl.(*ast.Field)
+		if !ok {
+			return
+		}
+
+		starExpr, ok := field.Type.(*ast.StarExpr)
+		if !ok {
+			return
+		}
+
+		ident, ok = starExpr.X.(*ast.Ident)
+		if !ok {
+			return
+		}
+
+		typeSpec, ok := ident.Obj.Decl.(*ast.TypeSpec)
+		if !ok {
+			return
+		}
+
+		structType, ok := typeSpec.Type.(*ast.StructType)
+		if !ok {
+			return
+		}
+
+		var searchField *ast.Field
+
+	fieldsLoop:
+		for _, field := range structType.Fields.List {
+			for _, name := range field.Names {
+				if refName == name.Name {
+					searchField = field
+					break fieldsLoop
+				}
+			}
+		}
+
+		if searchField == nil {
+			return
+		}
+
+		switch tt := searchField.Type.(type) {
+		case *ast.Ident: // inside pkg
+			searchName := tt.Name // interface / struct name
+
+			mappingDir, _ := filepath.Split(sourceFileName)
+
+			// TODO: cache results (use global variable)
+			filepath.Walk(mappingDir, func(path string, info os.FileInfo, err error) error {
+				if info.IsDir() {
+					if path == mappingDir {
+						return nil
+					}
+					return filepath.SkipDir
+				}
+
+				fset := token.NewFileSet()
+				searchNode, err := parser.ParseFile(fset, path, nil, parser.ParseComments) // 1. parse AST for router source file
+				if err != nil {
+					return err
+				}
+
+				if obj, ok := searchNode.Scope.Objects[searchName]; ok {
+					typeSpec, ok := obj.Decl.(*ast.TypeSpec)
+					if !ok {
+						return nil
+					}
+
+					// TODO: struct methods
+					interfaceType, ok := typeSpec.Type.(*ast.InterfaceType)
+					if !ok {
+						return nil
+					}
+
+					for _, method := range interfaceType.Methods.List {
+						methodFun, ok := method.Type.(*ast.FuncType)
+						if !ok {
+							continue
+						}
+
+						fmt.Println(methodFun)
+
+						// TODO: get argument number
+						//methodFun.Results.List[0].Type
+					}
+
+				}
+
+				fmt.Println(searchNode)
+				return nil
+			})
+		case *ast.SelectorExpr: // outside pkg
+
+		}
+
+		fmt.Println(node)
+	}
+}
+
 // TODO: search within package / another packages
 func (encoder *astSchemaEncoder) astToSchemaRef(expr ast.Expr) (*openapi3.SchemaRef, error) {
 	var schemaRefFromStructField func(field *ast.Field) (*openapi3.SchemaRef, string, error)
@@ -743,6 +901,75 @@ func (encoder *astSchemaEncoder) astToSchemaRef(expr ast.Expr) (*openapi3.Schema
 		return nil
 	}
 
+	parseMap := func(t *ast.CompositeLit) error {
+		for _, elt := range t.Elts {
+			kv, ok := elt.(*ast.KeyValueExpr)
+			if !ok {
+				continue
+			}
+
+			// TODO: string | int | bool keys
+			key := ""
+
+			if k, ok := kv.Key.(*ast.BasicLit); ok {
+				if unquoted, err := strconv.Unquote(k.Value); err != nil {
+					key = k.Value
+				} else {
+					key = unquoted
+				}
+			}
+
+			if key == "" {
+				continue
+			}
+
+			switch ttt := kv.Value.(type) {
+			case *ast.BasicLit:
+				valType := getTypeFromToken(ttt.Kind)
+				properties[key] = &openapi3.SchemaRef{
+					Ref: "",
+					Value: &openapi3.Schema{
+						Type:    valType,
+						Example: getTypeDefaultValue(valType),
+					},
+				}
+			case *ast.Ident:
+				if ttt.Obj != nil {
+					if v, ok := ttt.Obj.Decl.(*ast.ValueSpec); ok {
+						schemaRef, err := encoder.astToSchemaRef(v.Type)
+						if err != nil {
+							log.Println(err)
+							return err
+						}
+
+						properties[key] = schemaRef
+
+						break
+					}
+				}
+
+				valType := getTypeFromIdent(ttt)
+				properties[key] = &openapi3.SchemaRef{
+					Ref: "",
+					Value: &openapi3.Schema{
+						Type:    valType,
+						Example: getTypeDefaultValue(valType),
+					},
+				}
+			case *ast.CompositeLit:
+				schemaRef, err := encoder.astToSchemaRef(ttt.Type)
+				if err != nil {
+					log.Println(err)
+					return err
+				}
+
+				properties[key] = schemaRef
+			}
+		}
+
+		return nil
+	}
+
 	switch t := expr.(type) {
 	case *ast.Ident: // &exampleStructInOtherFile{} | var req request
 		if t.Obj == nil {
@@ -763,10 +990,15 @@ func (encoder *astSchemaEncoder) astToSchemaRef(expr ast.Expr) (*openapi3.Schema
 		if ref, _ := encoder.astToSchemaOutsidePackage(t); ref != nil {
 			properties = ref.Value.Properties
 		} else {
-			ident := t.X.(*ast.Ident)
-
-			if ref, _ := encoder.astToSchemaRefWithinPackage(ident); ref != nil {
-				properties = ref.Value.Properties
+			switch tx := t.X.(type) {
+			case *ast.Ident:
+				if ref, _ := encoder.astToSchemaRefWithinPackage(tx); ref != nil {
+					properties = ref.Value.Properties
+				} else {
+					fmt.Println("ok")
+				}
+			default:
+				fmt.Println("ww")
 			}
 		}
 	case *ast.CompositeLit:
@@ -788,70 +1020,23 @@ func (encoder *astSchemaEncoder) astToSchemaRef(expr ast.Expr) (*openapi3.Schema
 			}
 
 			properties = schemaRef.Value.Properties
+		case *ast.SelectorExpr:
+			schemaRef, err := encoder.astToSchemaRef(tt)
+			if err != nil {
+				log.Println(err)
+				return nil, err
+			}
+
+			if encoder.emptySchemaProperties(schemaRef) && t.Elts != nil && len(t.Elts) > 0 {
+				if err := parseMap(t); err != nil {
+					return nil, err
+				}
+			} else {
+				properties = schemaRef.Value.Properties
+			}
 		default:
-			for _, elt := range t.Elts {
-				kv, ok := elt.(*ast.KeyValueExpr)
-				if !ok {
-					continue
-				}
-
-				// TODO: string | int | bool keys
-				key := ""
-
-				if k, ok := kv.Key.(*ast.BasicLit); ok {
-					if unquoted, err := strconv.Unquote(k.Value); err != nil {
-						key = k.Value
-					} else {
-						key = unquoted
-					}
-				}
-
-				if key == "" {
-					continue
-				}
-
-				switch ttt := kv.Value.(type) {
-				case *ast.BasicLit:
-					valType := getTypeFromToken(ttt.Kind)
-					properties[key] = &openapi3.SchemaRef{
-						Ref: "",
-						Value: &openapi3.Schema{
-							Type:    valType,
-							Example: getTypeDefaultValue(valType),
-						},
-					}
-				case *ast.Ident:
-					if ttt.Obj != nil {
-						if v, ok := ttt.Obj.Decl.(*ast.ValueSpec); ok {
-							schemaRef, err := encoder.astToSchemaRef(v.Type)
-							if err != nil {
-								log.Println(err)
-								return nil, err
-							}
-
-							properties[key] = schemaRef
-
-							break
-						}
-					}
-
-					valType := getTypeFromIdent(ttt)
-					properties[key] = &openapi3.SchemaRef{
-						Ref: "",
-						Value: &openapi3.Schema{
-							Type:    valType,
-							Example: getTypeDefaultValue(valType),
-						},
-					}
-				case *ast.CompositeLit:
-					schemaRef, err := encoder.astToSchemaRef(ttt.Type)
-					if err != nil {
-						log.Println(err)
-						return nil, err
-					}
-
-					properties[key] = schemaRef
-				}
+			if err := parseMap(t); err != nil {
+				return nil, err
 			}
 		}
 	case *ast.StructType:
@@ -861,7 +1046,16 @@ func (encoder *astSchemaEncoder) astToSchemaRef(expr ast.Expr) (*openapi3.Schema
 
 		// TODO: array of another package structure
 	case *ast.ArrayType:
-		nestedSechemaRef, err := encoder.astToSchemaRef(t.Elt)
+		var arrExp ast.Expr
+
+		switch t := t.Elt.(type) {
+		case *ast.StarExpr:
+			arrExp = t.X
+		default:
+			arrExp = t
+		}
+
+		nestedSechemaRef, err := encoder.astToSchemaRef(arrExp)
 		if err != nil {
 			return nil, err
 		}
@@ -871,6 +1065,10 @@ func (encoder *astSchemaEncoder) astToSchemaRef(expr ast.Expr) (*openapi3.Schema
 		case *ast.Ident:
 			properties[t.Name] = ref
 		default:
+			if ref.Value.Properties == nil {
+				return ref, nil
+			}
+
 			properties = ref.Value.Properties
 		}
 
@@ -907,18 +1105,7 @@ func (encoder *astSchemaEncoder) astToSchemaRef(expr ast.Expr) (*openapi3.Schema
 
 func (encoder astSchemaEncoder) astToSchemaOutsidePackage(selector *ast.SelectorExpr) (*openapi3.SchemaRef, error) {
 	for _, nodeImport := range encoder.node.Imports { // search struct inside imports
-		importName := ""
-
-		if nodeImport.Name != nil {
-			importName = nodeImport.Name.Name
-		}
-
-		nodeImportPath, _ := strconv.Unquote(nodeImport.Path.Value)
-		_, pkg := filepath.Split(nodeImportPath)
-
-		if importName == "" {
-			importName = pkg
-		}
+		importName, nodeImportPath := getImportPkgName(nodeImport)
 
 		ident, ok := selector.X.(*ast.Ident)
 		if !ok {
@@ -979,4 +1166,8 @@ func (encoder astSchemaEncoder) astToSchemaRefWithinPackage(ident *ast.Ident) (*
 	}
 
 	return nil, nil
+}
+
+func (encoder astSchemaEncoder) emptySchemaProperties(schemaRef *openapi3.SchemaRef) bool {
+	return schemaRef == nil || schemaRef.Value == nil || schemaRef.Value.Properties == nil || len(schemaRef.Value.Properties) == 0
 }
