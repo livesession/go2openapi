@@ -1,7 +1,6 @@
 package restlix
 
 import (
-	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -15,9 +14,7 @@ import (
 
 	"github.com/fatih/structtag"
 	"github.com/getkin/kin-openapi/openapi3"
-	"github.com/getkin/kin-openapi/openapi3gen"
 	"github.com/kataras/iris/v12/core/router"
-	dynamicstruct "github.com/ompluscator/dynamic-struct"
 	gogitignore "github.com/sabhiram/go-gitignore"
 )
 
@@ -26,6 +23,19 @@ type SearchIdentifier struct {
 	ArgumentPosition int
 }
 
+// TODO: embedded struct
+/*
+	TODO: support
+
+	```
+	var req request
+
+	if err := ctx.ReadJSON(req | &req); err != nil {
+		a.BaseController.InternalError(ctx, errors.New("validation error"))
+		return
+	}
+   ```
+*/
 func parseRouterMethod(
 	openapi *openapi3.T,
 	sourceFileName string,
@@ -155,176 +165,11 @@ root:
 									}
 								}
 
-								// parse body
+								// parse response body
 							case *ast.ExprStmt: // TODO: response body, support 400, 404, 500 etc.
-								// TODO: response with responses structures in different packages and files
-								parseContextJSONStruct := func(structsMapping map[string]map[string]*ast.TypeSpec, compositeList *ast.CompositeLit) {
-									if operationName == debugOperationMethod {
-										fmt.Sprintf("d")
-									}
-									compositeTypIdent, ok := compositeList.Type.(*ast.Ident)
-									if !ok {
-										if compositeList.Elts == nil { // parse custom map
-											return
-										}
-
-										out := make(map[string]interface{})
-
-										for _, elt := range compositeList.Elts {
-											kv, ok := elt.(*ast.KeyValueExpr)
-											if !ok {
-												continue
-											}
-
-											key := ""
-											if k, ok := kv.Key.(*ast.BasicLit); !ok {
-												continue
-											} else {
-												key = k.Value
-											}
-
-											ident, ok := kv.Value.(*ast.Ident)
-											if !ok {
-												continue
-											}
-
-											if ident.Obj == nil {
-												continue
-											}
-
-											valueSpec, ok := ident.Obj.Decl.(*ast.ValueSpec)
-											if !ok {
-												continue
-											}
-											// TODO: arrays and non arrays
-
-											switch t := valueSpec.Type.(type) {
-											case *ast.ArrayType:
-												selector, ok := t.Elt.(*ast.SelectorExpr)
-												if ok {
-													builder := dynamicstruct.NewStruct()
-													parseStructFromOutside(selector, node, structsMapping, builder)
-													if operationName == debugOperationMethod {
-														fmt.Sprintf("d")
-													}
-												}
-											case *ast.Ident:
-
-											}
-											//valueSpec.Type.(*ast.ArrayType)
-											fmt.Println(key, ident, out)
-										}
-
-										return
-									}
-
-									typeSpec, ok := compositeTypIdent.Obj.Decl.(*ast.TypeSpec)
-									if !ok {
-										return
-									}
-
-									responseBodyStruct := dynamicstruct.NewStruct()
-
-									if err := parseStruct(typeSpec, responseBodyStruct); err != nil {
-										log.Println(err)
-										return
-									}
-
-									requestBodyStructInstance := responseBodyStruct.Build().New()
-
-									schemaRef, _, err := openapi3gen.NewSchemaRefForValue(requestBodyStructInstance)
-									if err != nil {
-										log.Println(err)
-										return
-									}
-									responseJSON := openapi3.NewResponse().
-										WithJSONSchemaRef(schemaRef)
-
-									// TOOD: support 400, 404, 500 etc.
-									//openapi.Components.Responses[operationName] = &openapi3.ResponseRef{
-									//	Value: responseJSON,
-									//} // TODO:
-									operation := openAPIOperationByMethod(openapi.Paths[route.Path], route.Method)
-									operation.Responses.Default().Value = responseJSON
-
+								if parseHandlerResponseAST(node, structsMapping, sourceFileName, t.X, operationName, openapi, route) {
 									responseParsed = true
-									return
 								}
-
-								call, ok := t.X.(*ast.CallExpr)
-								if !ok {
-									continue
-								}
-
-								selector, ok := call.Fun.(*ast.SelectorExpr)
-								if !ok {
-									continue
-								}
-
-								if selector.Sel.Name != "JSON" {
-									continue
-								}
-
-								ident, ok := selector.X.(*ast.Ident)
-								if !ok {
-									continue
-								}
-
-								f, ok := ident.Obj.Decl.(*ast.Field)
-								if !ok {
-									continue
-								}
-
-								tx, ok := f.Type.(*ast.SelectorExpr)
-								if !ok {
-									continue
-								}
-
-								if c, ok := tx.X.(*ast.Ident); !ok {
-									continue
-								} else if c.Name != "iris" {
-									continue
-								}
-
-								if tx.Sel.Name != "Context" {
-									continue
-								}
-
-								// yes it's iris context.JSON()
-
-								if len(call.Args) < 1 {
-									continue
-								}
-
-								if operationName == debugOperationMethod {
-									fmt.Sprintf("d")
-								}
-
-								argIdent, ok := call.Args[0].(*ast.Ident) // ctx.JSON(resp)
-								if !ok {
-									if compositeList, ok := call.Args[0].(*ast.CompositeLit); ok { // if ctx.JSON(&Struct{})
-										parseContextJSONStruct(structsMapping, compositeList)
-									}
-									continue
-								}
-
-								// else ctx.JSON(&variable)
-
-								assignStmt, ok := argIdent.Obj.Decl.(*ast.AssignStmt)
-								if !ok {
-									continue
-								}
-
-								if len(assignStmt.Rhs) < 1 {
-									continue
-								}
-
-								compositeList, ok := assignStmt.Rhs[0].(*ast.CompositeLit)
-								if !ok {
-									continue
-								}
-
-								parseContextJSONStruct(structsMapping, compositeList)
 							}
 						}
 					}
@@ -360,9 +205,15 @@ func parseHandlerBodyAST(
 	// TODO: support non pointer request struct also
 	requestBodyArg := callExpresssions.Args[argumentPosition] // 2. get validation struct e.g a.baseController.ValidateBody(ctx, &req) || &req ctx.ValidateRequest(&req)
 
-	requestBodyStruct := dynamicstruct.NewStruct()
-
 	parsed := false
+	var bodyOpenApiRef *openapi3.SchemaRef
+
+	astEncoder := &astSchemaEncoder{
+		node:           node,
+		structsMapping: structsMapping,
+		sourceFileName: sourceFileName,
+	}
+
 	switch reqBody := requestBodyArg.(type) {
 	// TODO: var req pkg.request
 	case *ast.UnaryExpr: //  if var req request
@@ -371,9 +222,9 @@ func parseHandlerBodyAST(
 		}
 		if ident, ok := reqBody.X.(*ast.Ident); ok {
 			if valueSpec, ok := ident.Obj.Decl.(*ast.ValueSpec); ok {
-				if ident, ok := valueSpec.Type.(*ast.Ident); ok {
-					parseRequestStructIdentWithinPackage(ident, sourceFileName, structsMapping, requestBodyStruct)
+				if ref, _ := astEncoder.astToSchemaRef(valueSpec.Type); ref != nil {
 					parsed = true
+					bodyOpenApiRef = ref
 				}
 			}
 		}
@@ -384,14 +235,9 @@ func parseHandlerBodyAST(
 		if assign, ok := reqBody.Obj.Decl.(*ast.AssignStmt); ok {
 			if expr, ok := assign.Rhs[0].(*ast.UnaryExpr); ok {
 				if composeList, ok := expr.X.(*ast.CompositeLit); ok {
-					switch t := composeList.Type.(type) {
-					case *ast.Ident: // &req{}
-						parseRequestStructIdentWithinPackage(t, sourceFileName, structsMapping, requestBodyStruct)
+					if ref, _ := astEncoder.astToSchemaRef(composeList.Type); ref != nil {
 						parsed = true
-					case *ast.SelectorExpr: // &pkg.req{}
-						if updated := parseStructFromOutside(t, node, structsMapping, requestBodyStruct); updated {
-							parsed = true
-						}
+						bodyOpenApiRef = ref
 					}
 				}
 			}
@@ -402,15 +248,8 @@ func parseHandlerBodyAST(
 		return false
 	}
 
-	requestBodyStructInstance := requestBodyStruct.Build().New()
-
-	schemaRef, _, err := openapi3gen.NewSchemaRefForValue(requestBodyStructInstance)
-	if err != nil {
-		panic(err)
-	}
-
 	requestBody := openapi3.NewRequestBody().
-		WithJSONSchemaRef(schemaRef)
+		WithJSONSchemaRef(bodyOpenApiRef)
 
 	// TODO: someRequestBody
 	// request body ref
@@ -432,131 +271,120 @@ func parseHandlerBodyAST(
 	return true
 }
 
-func parseRequestStructIdentWithinPackage(ident *ast.Ident, sourceFileName string, structsMapping map[string]map[string]*ast.TypeSpec, structBuilder dynamicstruct.Builder) {
-	if ident.Obj == nil { // strategy for in another file
-		sourceFileName = strings.ReplaceAll(sourceFileName, "./", "")
-		sourceDir, _ := filepath.Split(sourceFileName)
-
-		// TODO: dir mapping instead of loop all files
-		for mappingPath, structs := range structsMapping {
-			if mappingPath == sourceFileName {
-				continue
-			}
-
-			dir, _ := filepath.Split(mappingPath)
-
-			withinInnerPackage := sourceDir == dir
-
-			if withinInnerPackage {
-				if typeSpec, ok := structs[ident.Name]; ok && typeSpec != nil {
-					if err := parseStruct(typeSpec, structBuilder); err != nil {
-						log.Println(err)
-						continue
-					}
-					break
-				}
-			}
-		}
-
-		return
+func parseHandlerResponseAST(
+	node *ast.File,
+	structsMapping map[string]map[string]*ast.TypeSpec,
+	sourceFileName string,
+	exp ast.Expr,
+	operationName string,
+	openapi *openapi3.T,
+	route *router.Route,
+) bool {
+	encoder := &astSchemaEncoder{
+		node:           node,
+		structsMapping: structsMapping,
+		sourceFileName: sourceFileName,
 	}
 
-	if typeSpec, ok := ident.Obj.Decl.(*ast.TypeSpec); ok {
-		if err := parseStruct(typeSpec, structBuilder); err != nil {
+	// TODO: support 400, 404, 500 etc.
+	defaultResponse := func(schemaRef *openapi3.SchemaRef) {
+		responseJSON := openapi3.NewResponse().
+			WithJSONSchemaRef(schemaRef)
+
+		operation := openAPIOperationByMethod(openapi.Paths[route.Path], route.Method)
+		operation.Responses.Default().Value = responseJSON
+	}
+
+	parseContextJSONStruct := func(structsMapping map[string]map[string]*ast.TypeSpec, compositeList *ast.CompositeLit) bool {
+		if operationName == debugOperationMethod {
+			fmt.Sprintf("d")
+		}
+
+		schemaRef, err := encoder.astToSchemaRef(compositeList)
+		if err != nil {
 			log.Println(err)
-			return
-		}
-	}
-}
-
-func parseStructFromOutside(selector *ast.SelectorExpr, node *ast.File, structsMapping map[string]map[string]*ast.TypeSpec, structBuilder dynamicstruct.Builder) bool {
-	for _, nodeImport := range node.Imports { // search struct inside imports
-		importName := ""
-
-		if nodeImport.Name != nil {
-			importName = nodeImport.Name.Name
+			return false
 		}
 
-		nodeImportPath, _ := strconv.Unquote(nodeImport.Path.Value)
-		_, pkg := filepath.Split(nodeImportPath)
+		defaultResponse(schemaRef)
 
-		if importName == "" {
-			importName = pkg
-		}
-
-		ident, ok := selector.X.(*ast.Ident)
-		if !ok {
-			continue
-		}
-
-		if importName != ident.Name {
-			continue
-		}
-
-		// TODO: dir mapping instead of loop all files
-		for mappingPath, structs := range structsMapping { // strategy for in another pkg
-			mappingDir, _ := filepath.Split(mappingPath)
-
-			if strings.HasSuffix(mappingDir, "/") {
-				mappingDir = mappingDir[:len(mappingDir)-1]
-			}
-			if !strings.HasSuffix(nodeImportPath, mappingDir) {
-				continue
-			}
-
-			if typeSpec, ok := structs[selector.Sel.Name]; ok && typeSpec != nil {
-				if err := parseStruct(typeSpec, structBuilder); err != nil {
-					log.Println(err)
-					continue
-				}
-				return true
-			}
-		}
+		return true
 	}
 
-	return false
-}
-
-func parseStruct(typeSpec *ast.TypeSpec, structBuilder dynamicstruct.Builder) error {
-	structSpec, ok := typeSpec.Type.(*ast.StructType)
-
+	call, ok := exp.(*ast.CallExpr)
 	if !ok {
-		return errors.New("invalid type")
+		return false
 	}
 
-	for _, field := range structSpec.Fields.List {
-		if field.Tag == nil {
-			continue
-		}
-		tags, err := structtag.Parse(strings.ReplaceAll(field.Tag.Value, "`", ""))
-		if err != nil {
-			return err
-		}
-
-		tag, err := tags.Get("json")
-		if err != nil {
-			return err
-		}
-
-		if f, ok := field.Type.(*ast.Ident); ok {
-			name := field.Names[0].Name // TODO: [0] is ok? why its an array
-			structBuilder.AddField(name, getTypeDefaultValue(f.Name), fmt.Sprintf(`json:"%s"`, tag.Name))
-		} else if f, ok := field.Type.(*ast.SelectorExpr); ok {
-			x := f.X.(*ast.Ident)
-
-			// TODO: check if it works
-			name := field.Names[0].Name
-			structBuilder.AddField(name, getTypeDefaultValue(x.Name), fmt.Sprintf(`json:"%s"`, tag.Name))
-
-			//switch t := getTypeDefaultValue(x.Name).(type) {
-			//case *time.Time:
-			//	name := field.Names[0].Name
-			//	structBuilder.AddField(name, t, fmt.Sprintf(`json:"%s"`, tag.Name))
-			//}
-		}
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
 	}
 
-	return nil
+	if selector.Sel.Name != "JSON" {
+		return false
+	}
+
+	ident, ok := selector.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+
+	f, ok := ident.Obj.Decl.(*ast.Field)
+	if !ok {
+		return false
+	}
+
+	tx, ok := f.Type.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+
+	if c, ok := tx.X.(*ast.Ident); !ok {
+		return false
+	} else if c.Name != "iris" {
+		return false
+	}
+
+	if tx.Sel.Name != "Context" {
+		return false
+	}
+
+	// yes it's iris context.JSON()
+
+	if len(call.Args) < 1 {
+		return false
+	}
+
+	if operationName == debugOperationMethod {
+		fmt.Sprintf("d")
+	}
+
+	argIdent, ok := call.Args[0].(*ast.Ident) // ctx.JSON(resp)
+	if !ok {
+		if compositeList, ok := call.Args[0].(*ast.CompositeLit); ok { // if ctx.JSON(&Struct{})
+			return parseContextJSONStruct(structsMapping, compositeList)
+		}
+		return false
+	}
+
+	// else ctx.JSON(&variable)
+
+	assignStmt, ok := argIdent.Obj.Decl.(*ast.AssignStmt)
+	if !ok {
+		return false
+	}
+
+	if len(assignStmt.Rhs) < 1 {
+		return false
+	}
+
+	compositeList, ok := assignStmt.Rhs[0].(*ast.CompositeLit)
+	if !ok {
+		return false
+	}
+
+	return parseContextJSONStruct(structsMapping, compositeList)
 }
 
 func matchCallExpression(operationName string, searchIdentifiers []*SearchIdentifier, exp ast.Expr) (callExpr *ast.CallExpr, foundArgumentPosition int, found bool) {
@@ -576,25 +404,6 @@ func matchCallExpression(operationName string, searchIdentifiers []*SearchIdenti
 	if !ok {
 		return
 	}
-
-	//selectorExpr = s
-	//
-	//if callOk {
-	//
-	//	return
-	//} else {
-	//	composeList, ok := exp.(*ast.CompositeLit)
-	//	if !ok {
-	//		return
-	//	}
-	//
-	//	s, ok := composeList.Type.(*ast.SelectorExpr)
-	//	if !ok {
-	//		return
-	//	}
-	//
-	//	selectorExpr = s
-	//}
 
 	if operationName == debugOperationMethod {
 		fmt.Sprintf("d")
@@ -863,13 +672,13 @@ func (encoder *astSchemaEncoder) astToSchemaRef(expr ast.Expr) (*openapi3.Schema
 		}
 
 		switch t := field.Type.(type) {
-		case *ast.Ident:
+		case *ast.Ident: // &req{}
 			if ref, _ := encoder.astToSchemaRefWithinPackage(t); ref != nil {
 				return ref, tag.Name, err
 			}
 
 			return schemaRef(t), tag.Name, nil
-		case *ast.SelectorExpr:
+		case *ast.SelectorExpr: // &pkg.req{}
 			if ref, _ := encoder.astToSchemaOutsidePackage(t); ref != nil {
 				return ref, tag.Name, err
 			}
@@ -882,58 +691,211 @@ func (encoder *astSchemaEncoder) astToSchemaRef(expr ast.Expr) (*openapi3.Schema
 
 			return schemaRef(ident), tag.Name, nil
 		case *ast.ArrayType:
-			ident := t.Elt.(*ast.Ident)
-			if ident.Obj != nil { // it's struct
-				typeSpec := ident.Obj.Decl.(*ast.TypeSpec)
-				nestedSechemaRef, err := encoder.astToSchemaRef(typeSpec.Type)
+			schemaRefFromIdent := func(ident *ast.Ident) *openapi3.SchemaRef {
+				if ident.Obj != nil { // it's struct
+					typeSpec := ident.Obj.Decl.(*ast.TypeSpec)
+					nestedSechemaRef, err := encoder.astToSchemaRef(typeSpec.Type)
 
-				if err != nil {
-					return nil, "", err
+					if err != nil {
+						return nil
+					}
+
+					return schemaRefArrayOfObject(nestedSechemaRef.Value.Properties)
+				} else {
+					return schemaRefArray(ident)
+				}
+			}
+
+			switch t := t.Elt.(type) {
+			case *ast.Ident:
+				if ref := schemaRefFromIdent(t); ref != nil {
+					return ref, tag.Name, nil
 				}
 
-				return schemaRefArrayOfObject(nestedSechemaRef.Value.Properties), tag.Name, nil
-			} else {
-				return schemaRefArray(ident), tag.Name, nil
+				return nil, "", nil
+			case *ast.StarExpr:
+				ident, ok := t.X.(*ast.Ident)
+				if ok {
+					if ref := schemaRefFromIdent(ident); ref != nil {
+						return ref, tag.Name, nil
+					}
+
+					return nil, "", nil
+				}
 			}
 		}
 
 		return nil, "", nil
 	}
 
-	switch t := expr.(type) {
-	case *ast.StructType:
-		for _, field := range t.Fields.List {
+	parseStructType := func(structType *ast.StructType) error {
+		for _, field := range structType.Fields.List {
 			ref, name, err := schemaRefFromStructField(field)
 			if err != nil {
-				return nil, err
+				return err
 			}
 
 			if ref != nil {
 				properties[name] = ref
 			}
 		}
-	case *ast.ArrayType:
-		ident := t.Elt.(*ast.Ident)
-		if ident.Obj != nil { // it's struct
-			typeSpec := ident.Obj.Decl.(*ast.TypeSpec)
-			nestedSechemaRef, err := encoder.astToSchemaRef(typeSpec.Type)
 
+		return nil
+	}
+
+	switch t := expr.(type) {
+	case *ast.Ident: // &exampleStructInOtherFile{} | var req request
+		if t.Obj == nil {
+			if ref, _ := encoder.astToSchemaRefWithinPackage(t); ref != nil {
+				properties = ref.Value.Properties
+			}
+		} else { // var req request
+			if typeSpec, ok := t.Obj.Decl.(*ast.TypeSpec); ok {
+				if structType, ok := typeSpec.Type.(*ast.StructType); ok {
+					if err := parseStructType(structType); err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
+
+	case *ast.SelectorExpr: // &objects.exampleStructInOtherFile{}
+		if ref, _ := encoder.astToSchemaOutsidePackage(t); ref != nil {
+			properties = ref.Value.Properties
+		} else {
+			ident := t.X.(*ast.Ident)
+
+			if ref, _ := encoder.astToSchemaRefWithinPackage(ident); ref != nil {
+				properties = ref.Value.Properties
+			}
+		}
+	case *ast.CompositeLit:
+		switch tt := t.Type.(type) {
+		case *ast.Ident:
+			typeSpec, ok := tt.Obj.Decl.(*ast.TypeSpec)
+			if !ok {
+				return nil, nil
+			}
+			structSpec, ok := typeSpec.Type.(*ast.StructType)
+			if !ok {
+				return nil, nil
+			}
+
+			schemaRef, err := encoder.astToSchemaRef(structSpec)
 			if err != nil {
+				log.Println(err)
 				return nil, err
 			}
 
-			ref := schemaRefArrayOfObject(nestedSechemaRef.Value.Properties)
+			properties = schemaRef.Value.Properties
+		default:
+			for _, elt := range t.Elts {
+				kv, ok := elt.(*ast.KeyValueExpr)
+				if !ok {
+					continue
+				}
 
-			if ref != nil {
-				properties[ident.Name] = ref
-			}
-		} else {
-			ref := schemaRefArray(ident)
+				// TODO: string | int | bool keys
+				key := ""
 
-			if ref != nil {
-				properties[ident.Name] = ref
+				if k, ok := kv.Key.(*ast.BasicLit); ok {
+					if unquoted, err := strconv.Unquote(k.Value); err != nil {
+						key = k.Value
+					} else {
+						key = unquoted
+					}
+				}
+
+				if key == "" {
+					continue
+				}
+
+				switch ttt := kv.Value.(type) {
+				case *ast.BasicLit:
+					valType := getTypeFromToken(ttt.Kind)
+					properties[key] = &openapi3.SchemaRef{
+						Ref: "",
+						Value: &openapi3.Schema{
+							Type:    valType,
+							Example: getTypeDefaultValue(valType),
+						},
+					}
+				case *ast.Ident:
+					if ttt.Obj != nil {
+						if v, ok := ttt.Obj.Decl.(*ast.ValueSpec); ok {
+							schemaRef, err := encoder.astToSchemaRef(v.Type)
+							if err != nil {
+								log.Println(err)
+								return nil, err
+							}
+
+							properties[key] = schemaRef
+
+							break
+						}
+					}
+
+					valType := getTypeFromIdent(ttt)
+					properties[key] = &openapi3.SchemaRef{
+						Ref: "",
+						Value: &openapi3.Schema{
+							Type:    valType,
+							Example: getTypeDefaultValue(valType),
+						},
+					}
+				case *ast.CompositeLit:
+					schemaRef, err := encoder.astToSchemaRef(ttt.Type)
+					if err != nil {
+						log.Println(err)
+						return nil, err
+					}
+
+					properties[key] = schemaRef
+				}
 			}
 		}
+	case *ast.StructType:
+		if err := parseStructType(t); err != nil {
+			return nil, err
+		}
+
+		// TODO: array of another package structure
+	case *ast.ArrayType:
+		nestedSechemaRef, err := encoder.astToSchemaRef(t.Elt)
+		if err != nil {
+			return nil, err
+		}
+		ref := schemaRefArrayOfObject(nestedSechemaRef.Value.Properties)
+
+		switch t := t.Elt.(type) {
+		case *ast.Ident:
+			properties[t.Name] = ref
+		default:
+			properties = ref.Value.Properties
+		}
+
+		// TODO: check below
+		//ident := t.Elt.(*ast.Ident)
+		//if ident.Obj != nil { // it's struct
+		//	typeSpec := ident.Obj.Decl.(*ast.TypeSpec)
+		//	nestedSechemaRef, err := encoder.astToSchemaRef(typeSpec.Type)
+		//
+		//	if err != nil {
+		//		return nil, err
+		//	}
+		//
+		//	ref := schemaRefArrayOfObject(nestedSechemaRef.Value.Properties)
+		//
+		//	if ref != nil {
+		//		properties[ident.Name] = ref
+		//	}
+		//} else {
+		//	ref := schemaRefArray(ident)
+		//
+		//	if ref != nil {
+		//		properties[ident.Name] = ref
+		//	}
+		//}
 	}
 
 	return &openapi3.SchemaRef{

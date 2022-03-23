@@ -31,6 +31,11 @@ type (
 		CreatedAt time.Time `json:"created_at"`
 	}
 
+	requestNested struct {
+		Nested request `json:"nested_request"`
+		Wuwu   string  `json:"wuwu"`
+	}
+
 	response struct {
 		ID      uint64 `json:"id"`
 		Message string `json:"message"`
@@ -72,12 +77,13 @@ func Init() {
 	app.Delete("/test-basecontroller-request-struct-in-variable/{id:uint64}", a.testBaseControllerRequestStructInVariable)
 	app.Delete("/test-basecontroller-request-struct-in-different-file/{id:uint64}", a.testBaseControllerRequestStructInDifferentFile)
 	app.Delete("/test-basecontroller-request-struct-in-different-file-and-package/{id:uint64}", a.testBaseControllerRequestStructInDifferentFileAndPackage) // TODO:
-
 	app.Delete(
 		"/test-basecontroller-middleware/{id:uint64}",
 		middleware,
 		a.testBaseControllerMiddleware,
 	) // TODO:
+	app.Delete("/test-basecontroller-request-struct-nested/{id:uint64}", a.testBaseControllerRequestStructNested)            // TODO:
+	app.Delete("/test-basecontroller-request-struct-map-response/{id:uint64}", a.testBaseControllerRequestStructMapResponse) // TODO:
 
 	//routes := app.APIBuilder.GetRoutes()
 	fmt.Println(app.APIBuilder.GetRoutes()[0].MainHandlerName)
@@ -205,5 +211,37 @@ func (a *api) testBaseControllerMiddleware(ctx iris.Context) {
 
 	ctx.JSON(response3{
 		ID: "1",
+	})
+}
+
+func (a *api) testBaseControllerRequestStructNested(ctx iris.Context) {
+	req := &requestNested{}
+
+	if err := ctx.ReadJSON(req); err != nil {
+		a.BaseController.InternalError(ctx, errors.New("validation error"))
+		return
+	}
+
+	ctx.JSON(response3{
+		ID: "1",
+	})
+}
+
+func (a *api) testBaseControllerRequestStructMapResponse(ctx iris.Context) {
+	var req request
+
+	if err := ctx.ReadJSON(&req); err != nil {
+		a.BaseController.InternalError(ctx, errors.New("validation error"))
+		return
+	}
+
+	ctx.JSON(map[string]interface{}{
+		"a":                          "a",
+		"b":                          1,
+		"c":                          true,
+		"above_struct":               request{},
+		"within_package_struct":      exampleStructInOtherFile{},
+		"outside_package_struct":     objects2.ExampleStructInOtherFileAndPackage{},
+		"outside_package_struct_arr": []*objects2.ExampleStructInOtherFileAndPackage{},
 	})
 }

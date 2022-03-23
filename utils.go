@@ -1,6 +1,8 @@
 package restlix
 
 import (
+	"go/ast"
+	"go/token"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -48,6 +50,32 @@ func getTypeDefaultValue(typ string) interface{} {
 	}
 
 	return nil
+}
+
+func getTypeFromToken(t token.Token) string {
+	switch t {
+	case token.INT:
+		return "int"
+	case token.FLOAT:
+		return "float"
+	case token.CHAR:
+		return "string"
+	case token.STRING:
+		return "string"
+	}
+
+	return ""
+}
+
+func getTypeFromIdent(t *ast.Ident) string {
+	switch t.Name {
+	case "true":
+		return "bool"
+	case "false":
+		return "bool"
+	}
+
+	return ""
 }
 
 func openAPIOperationByMethod(pathItem *openapi3.PathItem, method string) *openapi3.Operation {
