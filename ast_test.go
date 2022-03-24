@@ -28,7 +28,7 @@ func TestAstToSchemaRef(t *testing.T) {
 
 	for _, obj := range node.Scope.Objects {
 		if typeSpec, ok := obj.Decl.(*ast.TypeSpec); ok {
-			schemaRef, err := enc.astToSchemaRef(typeSpec.Type)
+			schemaRef, err := enc.astExprToSchemaRef(typeSpec.Type)
 			if err != nil {
 				t.Fatal(err)
 			}

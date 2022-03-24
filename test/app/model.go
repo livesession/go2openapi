@@ -1,7 +1,7 @@
 package app
 
 type Model interface {
-	GetSomething() (*response2, error)
+	GetSomething() (*request, error)
 }
 
 type model struct {
@@ -11,6 +11,6 @@ func newModel() Model {
 	return &model{}
 }
 
-func (m model) GetSomething() (*response2, error) {
-	return &response2{}, nil
+func (m model) GetSomething() (*request, error) {
+	return &request{}, nil
 }

@@ -230,7 +230,7 @@ func parseHandlerBodyAST(
 		}
 		if ident, ok := reqBody.X.(*ast.Ident); ok {
 			if valueSpec, ok := ident.Obj.Decl.(*ast.ValueSpec); ok {
-				if ref, _ := astEncoder.astToSchemaRef(valueSpec.Type); ref != nil {
+				if ref, _ := astEncoder.astExprToSchemaRef(valueSpec.Type); ref != nil {
 					parsed = true
 					bodyOpenApiRef = ref
 				}
@@ -243,7 +243,7 @@ func parseHandlerBodyAST(
 		if assign, ok := reqBody.Obj.Decl.(*ast.AssignStmt); ok {
 			if expr, ok := assign.Rhs[0].(*ast.UnaryExpr); ok {
 				if composeList, ok := expr.X.(*ast.CompositeLit); ok {
-					if ref, _ := astEncoder.astToSchemaRef(composeList.Type); ref != nil {
+					if ref, _ := astEncoder.astExprToSchemaRef(composeList.Type); ref != nil {
 						parsed = true
 						bodyOpenApiRef = ref
 					}
@@ -308,7 +308,7 @@ func parseHandlerResponseAST(
 			fmt.Sprintf("d")
 		}
 
-		schemaRef, err := encoder.astToSchemaRef(compositeList)
+		schemaRef, err := encoder.astExprToSchemaRef(compositeList)
 		if err != nil {
 			log.Println(err)
 			return false
@@ -409,7 +409,9 @@ func parseHandlerResponseAST(
 
 		return parseContextJSONStruct(structsMapping, compositeList)
 	case *ast.CallExpr:
-		astMethodToSchemaRef(node, sourceFileName, t)
+		if schemaRef := encoder.astMethodToSchemaRef(assignStmt, argIdent.Name); schemaRef != nil {
+			defaultResponse(schemaRef)
+		}
 	}
 
 	return false
@@ -659,8 +661,17 @@ func getImportPkgName(nodeImport *ast.ImportSpec) (importName, importPath string
 }
 
 // TODO: inside pkg, outside pkg, interfaces, structs
-func astMethodToSchemaRef(node *ast.File, sourceFileName string, callExpr *ast.CallExpr) {
-	switch t := callExpr.Fun.(type) {
+func (encoder *astSchemaEncoder) astMethodToSchemaRef(assignExpr *ast.AssignStmt, variableName string) (schemaRef *openapi3.SchemaRef) {
+	if assignExpr == nil || len(assignExpr.Rhs) == 0 {
+		return
+	}
+
+	call, ok := assignExpr.Rhs[0].(*ast.CallExpr)
+	if !ok {
+		return
+	}
+
+	switch t := call.Fun.(type) {
 	case *ast.SelectorExpr:
 		funSelector, ok := t.X.(*ast.SelectorExpr)
 		if !ok {
@@ -672,6 +683,10 @@ func astMethodToSchemaRef(node *ast.File, sourceFileName string, callExpr *ast.C
 
 		ident, ok := structRef.(*ast.Ident)
 		if !ok {
+			return
+		}
+
+		if ident.Obj == nil {
 			return
 		}
 
@@ -718,64 +733,34 @@ func astMethodToSchemaRef(node *ast.File, sourceFileName string, callExpr *ast.C
 
 		switch tt := searchField.Type.(type) {
 		case *ast.Ident: // inside pkg
-			searchName := tt.Name // interface / struct name
+			interfaceStructName := tt.Name // interface / struct name
 
-			mappingDir, _ := filepath.Split(sourceFileName)
-
-			// TODO: cache results (use global variable)
-			filepath.Walk(mappingDir, func(path string, info os.FileInfo, err error) error {
-				if info.IsDir() {
-					if path == mappingDir {
-						return nil
-					}
-					return filepath.SkipDir
-				}
-
-				fset := token.NewFileSet()
-				searchNode, err := parser.ParseFile(fset, path, nil, parser.ParseComments) // 1. parse AST for router source file
-				if err != nil {
-					return err
-				}
-
-				if obj, ok := searchNode.Scope.Objects[searchName]; ok {
-					typeSpec, ok := obj.Decl.(*ast.TypeSpec)
-					if !ok {
-						return nil
-					}
-
-					// TODO: struct methods
-					interfaceType, ok := typeSpec.Type.(*ast.InterfaceType)
-					if !ok {
-						return nil
-					}
-
-					for _, method := range interfaceType.Methods.List {
-						methodFun, ok := method.Type.(*ast.FuncType)
-						if !ok {
-							continue
-						}
-
-						fmt.Println(methodFun)
-
-						// TODO: get argument number
-						//methodFun.Results.List[0].Type
-					}
-
-				}
-
-				fmt.Println(searchNode)
-				return nil
-			})
+			if ref := encoder.methodWithingPkgToSchemaRef(interfaceStructName, "", variableName, assignExpr); ref != nil {
+				schemaRef = ref
+			}
 		case *ast.SelectorExpr: // outside pkg
+			ident, ok := tt.X.(*ast.Ident)
+			if !ok {
+				return
+			}
 
+			for _, importNode := range encoder.node.Imports {
+				importPkg, importPath := getImportPkgName(importNode)
+
+				if ident.Name != importPkg {
+					continue
+				}
+
+				fmt.Println(importPkg, importPath, tt)
+			}
 		}
-
-		fmt.Println(node)
 	}
+
+	return
 }
 
 // TODO: search within package / another packages
-func (encoder *astSchemaEncoder) astToSchemaRef(expr ast.Expr) (*openapi3.SchemaRef, error) {
+func (encoder *astSchemaEncoder) astExprToSchemaRef(expr ast.Expr) (*openapi3.SchemaRef, error) {
 	var schemaRefFromStructField func(field *ast.Field) (*openapi3.SchemaRef, string, error)
 	properties := make(openapi3.Schemas) // TODO: not always properties - sometimes primitive types or array of structs
 
@@ -816,6 +801,8 @@ func (encoder *astSchemaEncoder) astToSchemaRef(expr ast.Expr) (*openapi3.Schema
 	}
 
 	schemaRefFromStructField = func(field *ast.Field) (*openapi3.SchemaRef, string, error) {
+		var parseExpr func(expr ast.Expr) (*openapi3.SchemaRef, string, error)
+
 		if field.Tag == nil {
 			return nil, "", nil
 		}
@@ -829,61 +816,67 @@ func (encoder *astSchemaEncoder) astToSchemaRef(expr ast.Expr) (*openapi3.Schema
 			return nil, "", err
 		}
 
-		switch t := field.Type.(type) {
-		case *ast.Ident: // &req{}
-			if ref, _ := encoder.astToSchemaRefWithinPackage(t); ref != nil {
-				return ref, tag.Name, err
-			}
-
-			return schemaRef(t), tag.Name, nil
-		case *ast.SelectorExpr: // &pkg.req{}
-			if ref, _ := encoder.astToSchemaOutsidePackage(t); ref != nil {
-				return ref, tag.Name, err
-			}
-
-			ident := t.X.(*ast.Ident)
-
-			if ref, _ := encoder.astToSchemaRefWithinPackage(ident); ref != nil {
-				return ref, tag.Name, err
-			}
-
-			return schemaRef(ident), tag.Name, nil
-		case *ast.ArrayType:
-			schemaRefFromIdent := func(ident *ast.Ident) *openapi3.SchemaRef {
-				if ident.Obj != nil { // it's struct
-					typeSpec := ident.Obj.Decl.(*ast.TypeSpec)
-					nestedSechemaRef, err := encoder.astToSchemaRef(typeSpec.Type)
-
-					if err != nil {
-						return nil
-					}
-
-					return schemaRefArrayOfObject(nestedSechemaRef.Value.Properties)
-				} else {
-					return schemaRefArray(ident)
-				}
-			}
-
-			switch t := t.Elt.(type) {
-			case *ast.Ident:
-				if ref := schemaRefFromIdent(t); ref != nil {
-					return ref, tag.Name, nil
-				}
-
-				return nil, "", nil
+		parseExpr = func(expr ast.Expr) (*openapi3.SchemaRef, string, error) {
+			switch t := expr.(type) {
 			case *ast.StarExpr:
-				ident, ok := t.X.(*ast.Ident)
-				if ok {
-					if ref := schemaRefFromIdent(ident); ref != nil {
+				return parseExpr(t.X)
+			case *ast.Ident: // &req{}
+				if ref, _ := encoder.astToSchemaRefWithinPackage(t); ref != nil {
+					return ref, tag.Name, err
+				}
+
+				return schemaRef(t), tag.Name, nil
+			case *ast.SelectorExpr: // &pkg.req{}
+				if ref, _ := encoder.astToSchemaOutsidePackage(t); ref != nil {
+					return ref, tag.Name, err
+				}
+
+				ident := t.X.(*ast.Ident)
+
+				if ref, _ := encoder.astToSchemaRefWithinPackage(ident); ref != nil {
+					return ref, tag.Name, err
+				}
+
+				return schemaRef(ident), tag.Name, nil
+			case *ast.ArrayType:
+				schemaRefFromIdent := func(ident *ast.Ident) *openapi3.SchemaRef {
+					if ident.Obj != nil { // it's struct
+						typeSpec := ident.Obj.Decl.(*ast.TypeSpec)
+						nestedSechemaRef, err := encoder.astExprToSchemaRef(typeSpec.Type)
+
+						if err != nil {
+							return nil
+						}
+
+						return schemaRefArrayOfObject(nestedSechemaRef.Value.Properties)
+					} else {
+						return schemaRefArray(ident)
+					}
+				}
+
+				switch t := t.Elt.(type) {
+				case *ast.Ident:
+					if ref := schemaRefFromIdent(t); ref != nil {
 						return ref, tag.Name, nil
 					}
 
 					return nil, "", nil
+				case *ast.StarExpr:
+					ident, ok := t.X.(*ast.Ident)
+					if ok {
+						if ref := schemaRefFromIdent(ident); ref != nil {
+							return ref, tag.Name, nil
+						}
+
+						return nil, "", nil
+					}
 				}
 			}
+
+			return nil, "", nil
 		}
 
-		return nil, "", nil
+		return parseExpr(field.Type)
 	}
 
 	parseStructType := func(structType *ast.StructType) error {
@@ -923,6 +916,7 @@ func (encoder *astSchemaEncoder) astToSchemaRef(expr ast.Expr) (*openapi3.Schema
 				continue
 			}
 
+		tttLoop:
 			switch ttt := kv.Value.(type) {
 			case *ast.BasicLit:
 				valType := getTypeFromToken(ttt.Kind)
@@ -935,8 +929,9 @@ func (encoder *astSchemaEncoder) astToSchemaRef(expr ast.Expr) (*openapi3.Schema
 				}
 			case *ast.Ident:
 				if ttt.Obj != nil {
-					if v, ok := ttt.Obj.Decl.(*ast.ValueSpec); ok {
-						schemaRef, err := encoder.astToSchemaRef(v.Type)
+					switch v := ttt.Obj.Decl.(type) {
+					case *ast.ValueSpec:
+						schemaRef, err := encoder.astExprToSchemaRef(v.Type)
 						if err != nil {
 							log.Println(err)
 							return err
@@ -944,7 +939,15 @@ func (encoder *astSchemaEncoder) astToSchemaRef(expr ast.Expr) (*openapi3.Schema
 
 						properties[key] = schemaRef
 
-						break
+						break tttLoop
+
+					case *ast.AssignStmt:
+						schemaRef := encoder.astMethodToSchemaRef(v, ttt.Name)
+						if schemaRef != nil {
+							properties[key] = schemaRef
+
+							break tttLoop
+						}
 					}
 				}
 
@@ -957,7 +960,7 @@ func (encoder *astSchemaEncoder) astToSchemaRef(expr ast.Expr) (*openapi3.Schema
 					},
 				}
 			case *ast.CompositeLit:
-				schemaRef, err := encoder.astToSchemaRef(ttt.Type)
+				schemaRef, err := encoder.astExprToSchemaRef(ttt.Type)
 				if err != nil {
 					log.Println(err)
 					return err
@@ -994,11 +997,7 @@ func (encoder *astSchemaEncoder) astToSchemaRef(expr ast.Expr) (*openapi3.Schema
 			case *ast.Ident:
 				if ref, _ := encoder.astToSchemaRefWithinPackage(tx); ref != nil {
 					properties = ref.Value.Properties
-				} else {
-					fmt.Println("ok")
 				}
-			default:
-				fmt.Println("ww")
 			}
 		}
 	case *ast.CompositeLit:
@@ -1013,7 +1012,7 @@ func (encoder *astSchemaEncoder) astToSchemaRef(expr ast.Expr) (*openapi3.Schema
 				return nil, nil
 			}
 
-			schemaRef, err := encoder.astToSchemaRef(structSpec)
+			schemaRef, err := encoder.astExprToSchemaRef(structSpec)
 			if err != nil {
 				log.Println(err)
 				return nil, err
@@ -1021,7 +1020,7 @@ func (encoder *astSchemaEncoder) astToSchemaRef(expr ast.Expr) (*openapi3.Schema
 
 			properties = schemaRef.Value.Properties
 		case *ast.SelectorExpr:
-			schemaRef, err := encoder.astToSchemaRef(tt)
+			schemaRef, err := encoder.astExprToSchemaRef(tt)
 			if err != nil {
 				log.Println(err)
 				return nil, err
@@ -1055,7 +1054,7 @@ func (encoder *astSchemaEncoder) astToSchemaRef(expr ast.Expr) (*openapi3.Schema
 			arrExp = t
 		}
 
-		nestedSechemaRef, err := encoder.astToSchemaRef(arrExp)
+		nestedSechemaRef, err := encoder.astExprToSchemaRef(arrExp)
 		if err != nil {
 			return nil, err
 		}
@@ -1076,7 +1075,7 @@ func (encoder *astSchemaEncoder) astToSchemaRef(expr ast.Expr) (*openapi3.Schema
 		//ident := t.Elt.(*ast.Ident)
 		//if ident.Obj != nil { // it's struct
 		//	typeSpec := ident.Obj.Decl.(*ast.TypeSpec)
-		//	nestedSechemaRef, err := encoder.astToSchemaRef(typeSpec.Type)
+		//	nestedSechemaRef, err := encoder.astExprToSchemaRef(typeSpec.Type)
 		//
 		//	if err != nil {
 		//		return nil, err
@@ -1128,7 +1127,7 @@ func (encoder astSchemaEncoder) astToSchemaOutsidePackage(selector *ast.Selector
 			}
 
 			if typeSpec, ok := structs[selector.Sel.Name]; ok && typeSpec != nil {
-				return encoder.astToSchemaRef(typeSpec.Type)
+				return encoder.astExprToSchemaRef(typeSpec.Type)
 			}
 		}
 	}
@@ -1143,9 +1142,9 @@ func (encoder astSchemaEncoder) astToSchemaRefWithinPackage(ident *ast.Ident) (*
 
 		// TODO: dir mapping instead of loop all files
 		for mappingPath, structs := range encoder.structsMapping {
-			if mappingPath == sourceFileName {
-				continue
-			}
+			//if mappingPath == sourceFileName {
+			//	continue
+			//}
 
 			dir, _ := filepath.Split(mappingPath)
 
@@ -1153,7 +1152,7 @@ func (encoder astSchemaEncoder) astToSchemaRefWithinPackage(ident *ast.Ident) (*
 
 			if withinInnerPackage {
 				if typeSpec, ok := structs[ident.Name]; ok && typeSpec != nil {
-					return encoder.astToSchemaRef(typeSpec.Type)
+					return encoder.astExprToSchemaRef(typeSpec.Type)
 				}
 			}
 		}
@@ -1162,10 +1161,100 @@ func (encoder astSchemaEncoder) astToSchemaRefWithinPackage(ident *ast.Ident) (*
 	}
 
 	if typeSpec, ok := ident.Obj.Decl.(*ast.TypeSpec); ok {
-		return encoder.astToSchemaRef(typeSpec.Type)
+		return encoder.astExprToSchemaRef(typeSpec.Type)
 	}
 
 	return nil, nil
+}
+
+// e.g interfaceStructName - "AccountsModel", variableName - "accounts", assignExpr - accounts, err := a.accountsModel.GetAccount
+// TODO: check by method name also (interfaceStructMethodName)
+func (encoder astSchemaEncoder) methodWithingPkgToSchemaRef(
+	interfaceStructName,
+	interfaceStructMethodName,
+	variableName string,
+	assignExpr *ast.AssignStmt,
+) (schemaRef *openapi3.SchemaRef) {
+	mappingDir, _ := filepath.Split(encoder.sourceFileName)
+
+	// TODO: cache results (use global variable)
+	filepath.Walk(mappingDir, func(path string, info os.FileInfo, err error) error {
+		if schemaRef != nil {
+			return filepath.SkipDir
+		}
+		if info.IsDir() {
+			if path == mappingDir {
+				return nil
+			}
+			return filepath.SkipDir
+		}
+
+		fset := token.NewFileSet()
+		searchNode, err := parser.ParseFile(fset, path, nil, parser.ParseComments) // 1. parse AST for router source file
+		if err != nil {
+			return err
+		}
+
+		if obj, ok := searchNode.Scope.Objects[interfaceStructName]; ok {
+			typeSpec, ok := obj.Decl.(*ast.TypeSpec)
+			if !ok {
+				return nil
+			}
+
+			// TODO: struct methods
+			interfaceType, ok := typeSpec.Type.(*ast.InterfaceType)
+			if !ok {
+				return nil
+			}
+
+			for _, method := range interfaceType.Methods.List {
+				methodFun, ok := method.Type.(*ast.FuncType)
+				if !ok {
+					continue
+				}
+
+				var index *int
+
+				for i, l := range assignExpr.Lhs { // resp, err :=
+					ident, ok := l.(*ast.Ident)
+					if !ok {
+						continue
+					}
+
+					if ident.Name == variableName {
+						index = &i
+						break
+					}
+				}
+
+				if index == nil {
+					continue
+				}
+
+				if methodFun.Results == nil {
+					continue
+				}
+
+				result := methodFun.Results.List[*index]
+
+				switch t := result.Type.(type) {
+				case *ast.StarExpr:
+					ref, _ := encoder.astExprToSchemaRef(t.X)
+					schemaRef = ref
+					break
+
+				default:
+					ref, _ := encoder.astExprToSchemaRef(t)
+					schemaRef = ref
+					break
+				}
+			}
+		}
+
+		return nil
+	})
+
+	return
 }
 
 func (encoder astSchemaEncoder) emptySchemaProperties(schemaRef *openapi3.SchemaRef) bool {
