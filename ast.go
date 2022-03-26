@@ -1,4 +1,4 @@
-package restlix
+package restflix
 
 import (
 	"fmt"
@@ -23,9 +23,8 @@ type SearchIdentifier struct {
 	ArgumentPosition int
 }
 
-// TODO: embedded struct
 /*
-	TODO: support
+	TODO: support errors
 
 	```
 	var req request
@@ -36,6 +35,34 @@ type SearchIdentifier struct {
 	}
    ```
 */
+// TODO: issues with "-": "",
+// TODO: custom types
+// TODO: embedded structs
+// TODO: nested interface/struct method response (outside pkg where definition)
+// TODO: support
+/*
+	support nested within function make
+	```
+	response := &objects.GetVisitorsSegmentResponse{
+		Results: make([]*objects.VisitorSegmentStats, 0),
+	}
+	```
+
+	support variable declaration point to outside pkg
+
+	var (
+		card         *objects.Card
+		billingInfo  *objects.BillingInfo
+		subscription *objects.Subscription
+	)
+	```
+	response := iris.Map{
+		"card": card,
+		...
+	}
+	```
+*/
+
 func parseRouterMethod(
 	openapi *openapi3.T,
 	sourceFileName string,
@@ -43,6 +70,7 @@ func parseRouterMethod(
 	route *router.Route,
 	structsMapping map[string]map[string]*ast.TypeSpec,
 	searchIdentifiers []*SearchIdentifier,
+	goModName string,
 ) {
 	if route.Method == http.MethodOptions {
 		return
@@ -142,7 +170,7 @@ root:
 									if operationName == debugOperationMethod {
 										fmt.Sprintf("d")
 									}
-									if parseHandlerBodyAST(node, sourceFileName, structsMapping, operationName, searchIdentifiers, rhs, openapi, route) {
+									if parseHandlerBodyAST(node, sourceFileName, structsMapping, operationName, searchIdentifiers, rhs, openapi, route, goModName) {
 										bodyParsed = true
 									}
 								}
@@ -164,7 +192,7 @@ root:
 									if operationName == debugOperationMethod {
 										fmt.Sprintf("d")
 									}
-									if parseHandlerBodyAST(node, sourceFileName, structsMapping, operationName, searchIdentifiers, rhs, openapi, route) {
+									if parseHandlerBodyAST(node, sourceFileName, structsMapping, operationName, searchIdentifiers, rhs, openapi, route, goModName) {
 										bodyParsed = true
 									}
 								}
@@ -175,7 +203,7 @@ root:
 									fmt.Sprintf("d")
 								}
 
-								if parseHandlerResponseAST(node, structsMapping, sourceFileName, t.X, operationName, openapi, route) {
+								if parseHandlerResponseAST(node, structsMapping, sourceFileName, t.X, operationName, openapi, route, goModName) {
 									responseParsed = true
 								}
 							}
@@ -197,6 +225,7 @@ func parseHandlerBodyAST(
 	exp ast.Expr,
 	openapi *openapi3.T,
 	route *router.Route,
+	goModName string,
 ) bool {
 	callExpresssions, argumentPosition, match := matchCallExpression(operationName, searchIdentifiers, exp) // 1. match call expression e.g a.baseController.ValidateBody(ctx, &req)
 	if operationName == debugOperationMethod {
@@ -216,10 +245,12 @@ func parseHandlerBodyAST(
 	parsed := false
 	var bodyOpenApiRef *openapi3.SchemaRef
 
+	sourceDir, _ := filepath.Split(strings.ReplaceAll(sourceFileName, "./", ""))
 	astEncoder := &astSchemaEncoder{
 		node:           node,
 		structsMapping: structsMapping,
-		sourceFileName: sourceFileName,
+		sourceDir:      sourceDir,
+		goModName:      goModName,
 	}
 
 	switch reqBody := requestBodyArg.(type) {
@@ -230,7 +261,7 @@ func parseHandlerBodyAST(
 		}
 		if ident, ok := reqBody.X.(*ast.Ident); ok {
 			if valueSpec, ok := ident.Obj.Decl.(*ast.ValueSpec); ok {
-				if ref, _ := astEncoder.astExprToSchemaRef(valueSpec.Type); ref != nil {
+				if ref, _ := astEncoder.astExprToSchemaRef(operationName, valueSpec.Type); ref != nil {
 					parsed = true
 					bodyOpenApiRef = ref
 				}
@@ -243,7 +274,7 @@ func parseHandlerBodyAST(
 		if assign, ok := reqBody.Obj.Decl.(*ast.AssignStmt); ok {
 			if expr, ok := assign.Rhs[0].(*ast.UnaryExpr); ok {
 				if composeList, ok := expr.X.(*ast.CompositeLit); ok {
-					if ref, _ := astEncoder.astExprToSchemaRef(composeList.Type); ref != nil {
+					if ref, _ := astEncoder.astExprToSchemaRef(operationName, composeList.Type); ref != nil {
 						parsed = true
 						bodyOpenApiRef = ref
 					}
@@ -287,11 +318,15 @@ func parseHandlerResponseAST(
 	operationName string,
 	openapi *openapi3.T,
 	route *router.Route,
+	goModName string,
 ) bool {
+	sourceDir, _ := filepath.Split(strings.ReplaceAll(sourceFileName, "./", ""))
+
 	encoder := &astSchemaEncoder{
 		node:           node,
 		structsMapping: structsMapping,
-		sourceFileName: sourceFileName,
+		sourceDir:      sourceDir,
+		goModName:      goModName,
 	}
 
 	// TODO: support 400, 404, 500 etc.
@@ -308,7 +343,7 @@ func parseHandlerResponseAST(
 			fmt.Sprintf("d")
 		}
 
-		schemaRef, err := encoder.astExprToSchemaRef(compositeList)
+		schemaRef, err := encoder.astExprToSchemaRef(operationName, compositeList)
 		if err != nil {
 			log.Println(err)
 			return false
@@ -372,17 +407,46 @@ func parseHandlerResponseAST(
 		fmt.Sprintf("d")
 	}
 
-	argIdent, ok := call.Args[0].(*ast.Ident)
-	if !ok {
-		switch t := call.Args[0].(type) {
+	parseExpr := func(expr ast.Expr) bool {
+		if operationName == debugOperationMethod {
+			fmt.Sprintf("d")
+		}
+		switch t := expr.(type) {
 		case *ast.CompositeLit:
 			return parseContextJSONStruct(structsMapping, t)
 		case *ast.UnaryExpr:
-			if compositeList, ok := t.X.(*ast.CompositeLit); ok { // if ctx.JSON(&Struct{})
-				return parseContextJSONStruct(structsMapping, compositeList)
+			compositeList, ok := t.X.(*ast.CompositeLit) // if ctx.JSON(&Struct{})
+			if !ok {
+				return false
 			}
-			return false
+
+			return parseContextJSONStruct(structsMapping, compositeList)
+		case *ast.CallExpr:
+			if operationName == debugOperationMethod {
+				fmt.Sprintf("d")
+			}
+
+			argIdent, ok := call.Args[0].(*ast.Ident)
+			if !ok {
+				return false
+			}
+
+			assignStmt, ok := argIdent.Obj.Decl.(*ast.AssignStmt)
+			if !ok {
+				return false
+			}
+
+			if schemaRef := encoder.astMethodToSchemaRef(operationName, assignStmt, argIdent.Name); schemaRef != nil {
+				defaultResponse(schemaRef)
+			}
 		}
+
+		return false
+	}
+
+	argIdent, ok := call.Args[0].(*ast.Ident)
+	if !ok {
+		return parseExpr(call.Args[0])
 	}
 
 	assignStmt, ok := argIdent.Obj.Decl.(*ast.AssignStmt)
@@ -398,23 +462,7 @@ func parseHandlerResponseAST(
 		fmt.Sprintf("d")
 	}
 
-	switch t := assignStmt.Rhs[0].(type) {
-	case *ast.CompositeLit:
-		return parseContextJSONStruct(structsMapping, t)
-	case *ast.UnaryExpr:
-		compositeList, ok := t.X.(*ast.CompositeLit)
-		if !ok {
-			return false
-		}
-
-		return parseContextJSONStruct(structsMapping, compositeList)
-	case *ast.CallExpr:
-		if schemaRef := encoder.astMethodToSchemaRef(assignStmt, argIdent.Name); schemaRef != nil {
-			defaultResponse(schemaRef)
-		}
-	}
-
-	return false
+	return parseExpr(assignStmt.Rhs[0])
 }
 
 func matchCallExpression(operationName string, searchIdentifiers []*SearchIdentifier, exp ast.Expr) (callExpr *ast.CallExpr, foundArgumentPosition int, found bool) {
@@ -643,7 +691,8 @@ func mapStructsFromFiles(root string) (map[string]map[string]*ast.TypeSpec, erro
 type astSchemaEncoder struct {
 	node           *ast.File
 	structsMapping map[string]map[string]*ast.TypeSpec
-	sourceFileName string
+	sourceDir      string
+	goModName      string
 }
 
 func getImportPkgName(nodeImport *ast.ImportSpec) (importName, importPath string) {
@@ -661,7 +710,11 @@ func getImportPkgName(nodeImport *ast.ImportSpec) (importName, importPath string
 }
 
 // TODO: inside pkg, outside pkg, interfaces, structs
-func (encoder *astSchemaEncoder) astMethodToSchemaRef(assignExpr *ast.AssignStmt, variableName string) (schemaRef *openapi3.SchemaRef) {
+func (encoder *astSchemaEncoder) astMethodToSchemaRef(operationName string, assignExpr *ast.AssignStmt, variableName string) (schemaRef *openapi3.SchemaRef) {
+	if operationName == debugOperationMethod {
+		fmt.Sprintf("d")
+	}
+
 	if assignExpr == nil || len(assignExpr.Rhs) == 0 {
 		return
 	}
@@ -669,6 +722,11 @@ func (encoder *astSchemaEncoder) astMethodToSchemaRef(assignExpr *ast.AssignStmt
 	call, ok := assignExpr.Rhs[0].(*ast.CallExpr)
 	if !ok {
 		return
+	}
+
+	methodName := ""
+	if f, ok := call.Fun.(*ast.SelectorExpr); ok {
+		methodName = f.Sel.Name
 	}
 
 	switch t := call.Fun.(type) {
@@ -682,6 +740,7 @@ func (encoder *astSchemaEncoder) astMethodToSchemaRef(assignExpr *ast.AssignStmt
 		refName := funSelector.Sel.Name
 
 		ident, ok := structRef.(*ast.Ident)
+
 		if !ok {
 			return
 		}
@@ -717,6 +776,10 @@ func (encoder *astSchemaEncoder) astMethodToSchemaRef(assignExpr *ast.AssignStmt
 
 		var searchField *ast.Field
 
+		if operationName == debugOperationMethod {
+			fmt.Sprintf("d")
+		}
+
 	fieldsLoop:
 		for _, field := range structType.Fields.List {
 			for _, name := range field.Names {
@@ -731,17 +794,25 @@ func (encoder *astSchemaEncoder) astMethodToSchemaRef(assignExpr *ast.AssignStmt
 			return
 		}
 
+		if operationName == debugOperationMethod {
+			fmt.Sprintf("d")
+		}
+
 		switch tt := searchField.Type.(type) {
 		case *ast.Ident: // inside pkg
 			interfaceStructName := tt.Name // interface / struct name
 
-			if ref := encoder.methodWithingPkgToSchemaRef(interfaceStructName, "", variableName, assignExpr); ref != nil {
+			if ref := encoder.methodWithingPkgToSchemaRef(operationName, interfaceStructName, methodName, variableName, assignExpr); ref != nil {
 				schemaRef = ref
 			}
 		case *ast.SelectorExpr: // outside pkg
 			ident, ok := tt.X.(*ast.Ident)
 			if !ok {
 				return
+			}
+
+			if operationName == debugOperationMethod {
+				fmt.Sprintf("d")
 			}
 
 			for _, importNode := range encoder.node.Imports {
@@ -751,8 +822,40 @@ func (encoder *astSchemaEncoder) astMethodToSchemaRef(assignExpr *ast.AssignStmt
 					continue
 				}
 
-				fmt.Println(importPkg, importPath, tt)
+				interfaceStructName := tt.Sel.Name
+
+				pkgDir := strings.TrimPrefix(importPath, encoder.goModName)
+
+				// TODO: more optimized solution - cache, pass node as argument
+				outsideEncoder := &astSchemaEncoder{
+					node:           encoder.node, // TODO: i guess in the future it should be changed because what about nested node imports?
+					structsMapping: encoder.structsMapping,
+					sourceDir:      pkgDir,
+					goModName:      encoder.goModName,
+				}
+
+				if operationName == debugOperationMethod {
+					fmt.Sprintf("d")
+				}
+
+				if ref := outsideEncoder.methodWithingPkgToSchemaRef(operationName, interfaceStructName, methodName, variableName, assignExpr); ref != nil {
+					if operationName == debugOperationMethod {
+						fmt.Sprintf("d")
+					}
+					continue
+				}
 			}
+		}
+	case *ast.Ident:
+		if t.Name == "make" {
+			ref, err := encoder.astExprToSchemaRef(operationName, call.Args[0])
+			if err != nil {
+				fmt.Println(err)
+				break
+			}
+			schemaRef = ref
+		} else {
+			// TODO: handle other function calls
 		}
 	}
 
@@ -760,9 +863,13 @@ func (encoder *astSchemaEncoder) astMethodToSchemaRef(assignExpr *ast.AssignStmt
 }
 
 // TODO: search within package / another packages
-func (encoder *astSchemaEncoder) astExprToSchemaRef(expr ast.Expr) (*openapi3.SchemaRef, error) {
+func (encoder *astSchemaEncoder) astExprToSchemaRef(operationName string, expr ast.Expr) (*openapi3.SchemaRef, error) {
 	var schemaRefFromStructField func(field *ast.Field) (*openapi3.SchemaRef, string, error)
 	properties := make(openapi3.Schemas) // TODO: not always properties - sometimes primitive types or array of structs
+
+	if operationName == debugOperationMethod {
+		fmt.Sprintf("d")
+	}
 
 	schemaRef := func(ident *ast.Ident) *openapi3.SchemaRef {
 		return &openapi3.SchemaRef{
@@ -821,34 +928,60 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(expr ast.Expr) (*openapi3.Sc
 			case *ast.StarExpr:
 				return parseExpr(t.X)
 			case *ast.Ident: // &req{}
-				if ref, _ := encoder.astToSchemaRefWithinPackage(t); ref != nil {
+				if ref, _ := encoder.astToSchemaRefWithinPackage(operationName, t); ref != nil {
+					if operationName == debugOperationMethod {
+						fmt.Sprintf("d")
+					}
 					return ref, tag.Name, err
+				}
+
+				if operationName == debugOperationMethod {
+					fmt.Sprintf("d")
 				}
 
 				return schemaRef(t), tag.Name, nil
 			case *ast.SelectorExpr: // &pkg.req{}
-				if ref, _ := encoder.astToSchemaOutsidePackage(t); ref != nil {
+				if ref, _ := encoder.astToSchemaOutsidePackage(operationName, t); ref != nil {
+					if operationName == debugOperationMethod {
+						fmt.Sprintf("d")
+					}
 					return ref, tag.Name, err
+				}
+
+				if operationName == debugOperationMethod {
+					fmt.Sprintf("d")
 				}
 
 				ident := t.X.(*ast.Ident)
 
-				if ref, _ := encoder.astToSchemaRefWithinPackage(ident); ref != nil {
+				if ref, _ := encoder.astToSchemaRefWithinPackage(operationName, ident); ref != nil {
+					if operationName == debugOperationMethod {
+						fmt.Sprintf("d")
+					}
+
 					return ref, tag.Name, err
+				}
+
+				if operationName == debugOperationMethod {
+					fmt.Sprintf("d")
 				}
 
 				return schemaRef(ident), tag.Name, nil
 			case *ast.ArrayType:
+				if operationName == debugOperationMethod {
+					fmt.Sprintf("d")
+				}
+
 				schemaRefFromIdent := func(ident *ast.Ident) *openapi3.SchemaRef {
 					if ident.Obj != nil { // it's struct
 						typeSpec := ident.Obj.Decl.(*ast.TypeSpec)
-						nestedSechemaRef, err := encoder.astExprToSchemaRef(typeSpec.Type)
+						nestedSchemaRef, err := encoder.astExprToSchemaRef(operationName, typeSpec.Type)
 
 						if err != nil {
 							return nil
 						}
 
-						return schemaRefArrayOfObject(nestedSechemaRef.Value.Properties)
+						return schemaRefArrayOfObject(nestedSchemaRef.Value.Properties)
 					} else {
 						return schemaRefArray(ident)
 					}
@@ -873,6 +1006,10 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(expr ast.Expr) (*openapi3.Sc
 				}
 			}
 
+			if operationName == debugOperationMethod {
+				fmt.Sprintf("d")
+			}
+
 			return nil, "", nil
 		}
 
@@ -895,6 +1032,9 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(expr ast.Expr) (*openapi3.Sc
 	}
 
 	parseMap := func(t *ast.CompositeLit) error {
+		if operationName == debugOperationMethod {
+			fmt.Sprintf("d")
+		}
 		for _, elt := range t.Elts {
 			kv, ok := elt.(*ast.KeyValueExpr)
 			if !ok {
@@ -916,9 +1056,16 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(expr ast.Expr) (*openapi3.Sc
 				continue
 			}
 
+			if operationName == debugOperationMethod {
+				fmt.Sprintf("d")
+			}
+
 		tttLoop:
 			switch ttt := kv.Value.(type) {
 			case *ast.BasicLit:
+				if operationName == debugOperationMethod {
+					fmt.Sprintf("d")
+				}
 				valType := getTypeFromToken(ttt.Kind)
 				properties[key] = &openapi3.SchemaRef{
 					Ref: "",
@@ -928,22 +1075,47 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(expr ast.Expr) (*openapi3.Sc
 					},
 				}
 			case *ast.Ident:
+				if operationName == debugOperationMethod {
+					fmt.Sprintf("d")
+				}
 				if ttt.Obj != nil {
 					switch v := ttt.Obj.Decl.(type) {
 					case *ast.ValueSpec:
-						schemaRef, err := encoder.astExprToSchemaRef(v.Type)
+						if operationName == debugOperationMethod {
+							fmt.Sprintf("d")
+						}
+
+						schemaRef, err := encoder.astExprToSchemaRef(operationName, v.Type)
 						if err != nil {
 							log.Println(err)
 							return err
 						}
 
-						properties[key] = schemaRef
+						if !encoder.emptySchemaProperties(schemaRef) {
+							if operationName == debugOperationMethod {
+								fmt.Sprintf("d")
+							}
 
-						break tttLoop
+							properties[key] = schemaRef
+
+							break tttLoop
+						}
 
 					case *ast.AssignStmt:
-						schemaRef := encoder.astMethodToSchemaRef(v, ttt.Name)
-						if schemaRef != nil {
+						if operationName == debugOperationMethod {
+							fmt.Sprintf("d")
+						}
+
+						schemaRef := encoder.astMethodToSchemaRef(operationName, v, ttt.Name)
+
+						if operationName == debugOperationMethod {
+							fmt.Sprintf("d")
+						}
+						if !encoder.emptySchemaProperties(schemaRef) {
+							if operationName == debugOperationMethod {
+								fmt.Sprintf("d")
+							}
+
 							properties[key] = schemaRef
 
 							break tttLoop
@@ -960,7 +1132,11 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(expr ast.Expr) (*openapi3.Sc
 					},
 				}
 			case *ast.CompositeLit:
-				schemaRef, err := encoder.astExprToSchemaRef(ttt.Type)
+				if operationName == debugOperationMethod {
+					fmt.Sprintf("d")
+				}
+
+				schemaRef, err := encoder.astExprToSchemaRef(operationName, ttt.Type)
 				if err != nil {
 					log.Println(err)
 					return err
@@ -975,11 +1151,21 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(expr ast.Expr) (*openapi3.Sc
 
 	switch t := expr.(type) {
 	case *ast.Ident: // &exampleStructInOtherFile{} | var req request
+		if operationName == debugOperationMethod {
+			fmt.Sprintf("d")
+		}
 		if t.Obj == nil {
-			if ref, _ := encoder.astToSchemaRefWithinPackage(t); ref != nil {
+			if ref, _ := encoder.astToSchemaRefWithinPackage(operationName, t); ref != nil {
+				if operationName == debugOperationMethod {
+					fmt.Sprintf("d")
+				}
+
 				properties = ref.Value.Properties
 			}
 		} else { // var req request
+			if operationName == debugOperationMethod {
+				fmt.Sprintf("d")
+			}
 			if typeSpec, ok := t.Obj.Decl.(*ast.TypeSpec); ok {
 				if structType, ok := typeSpec.Type.(*ast.StructType); ok {
 					if err := parseStructType(structType); err != nil {
@@ -990,19 +1176,32 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(expr ast.Expr) (*openapi3.Sc
 		}
 
 	case *ast.SelectorExpr: // &objects.exampleStructInOtherFile{}
-		if ref, _ := encoder.astToSchemaOutsidePackage(t); ref != nil {
+		if ref, _ := encoder.astToSchemaOutsidePackage(operationName, t); ref != nil {
 			properties = ref.Value.Properties
 		} else {
+			if operationName == debugOperationMethod {
+				fmt.Sprintf("d")
+			}
 			switch tx := t.X.(type) {
 			case *ast.Ident:
-				if ref, _ := encoder.astToSchemaRefWithinPackage(tx); ref != nil {
+				if ref, _ := encoder.astToSchemaRefWithinPackage(operationName, tx); ref != nil {
+					if operationName == debugOperationMethod {
+						fmt.Sprintf("d")
+					}
 					properties = ref.Value.Properties
+				}
+
+				if operationName == debugOperationMethod {
+					fmt.Sprintf("d")
 				}
 			}
 		}
 	case *ast.CompositeLit:
 		switch tt := t.Type.(type) {
 		case *ast.Ident:
+			if operationName == debugOperationMethod {
+				fmt.Sprintf("d")
+			}
 			typeSpec, ok := tt.Obj.Decl.(*ast.TypeSpec)
 			if !ok {
 				return nil, nil
@@ -1012,7 +1211,7 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(expr ast.Expr) (*openapi3.Sc
 				return nil, nil
 			}
 
-			schemaRef, err := encoder.astExprToSchemaRef(structSpec)
+			schemaRef, err := encoder.astExprToSchemaRef(operationName, structSpec)
 			if err != nil {
 				log.Println(err)
 				return nil, err
@@ -1020,13 +1219,19 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(expr ast.Expr) (*openapi3.Sc
 
 			properties = schemaRef.Value.Properties
 		case *ast.SelectorExpr:
-			schemaRef, err := encoder.astExprToSchemaRef(tt)
+			if operationName == debugOperationMethod {
+				fmt.Sprintf("d")
+			}
+			schemaRef, err := encoder.astExprToSchemaRef(operationName, tt)
 			if err != nil {
 				log.Println(err)
 				return nil, err
 			}
 
 			if encoder.emptySchemaProperties(schemaRef) && t.Elts != nil && len(t.Elts) > 0 {
+				if operationName == debugOperationMethod {
+					fmt.Sprintf("d")
+				}
 				if err := parseMap(t); err != nil {
 					return nil, err
 				}
@@ -1034,6 +1239,9 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(expr ast.Expr) (*openapi3.Sc
 				properties = schemaRef.Value.Properties
 			}
 		default:
+			if operationName == debugOperationMethod {
+				fmt.Sprintf("d")
+			}
 			if err := parseMap(t); err != nil {
 				return nil, err
 			}
@@ -1054,9 +1262,17 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(expr ast.Expr) (*openapi3.Sc
 			arrExp = t
 		}
 
-		nestedSechemaRef, err := encoder.astExprToSchemaRef(arrExp)
+		if operationName == debugOperationMethod {
+			fmt.Sprintf("d")
+		}
+
+		nestedSechemaRef, err := encoder.astExprToSchemaRef(operationName, arrExp)
 		if err != nil {
 			return nil, err
+		}
+
+		if operationName == debugOperationMethod {
+			fmt.Sprintf("d")
 		}
 		ref := schemaRefArrayOfObject(nestedSechemaRef.Value.Properties)
 
@@ -1102,7 +1318,7 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(expr ast.Expr) (*openapi3.Sc
 	}, nil
 }
 
-func (encoder astSchemaEncoder) astToSchemaOutsidePackage(selector *ast.SelectorExpr) (*openapi3.SchemaRef, error) {
+func (encoder astSchemaEncoder) astToSchemaOutsidePackage(operationName string, selector *ast.SelectorExpr) (*openapi3.SchemaRef, error) {
 	for _, nodeImport := range encoder.node.Imports { // search struct inside imports
 		importName, nodeImportPath := getImportPkgName(nodeImport)
 
@@ -1127,7 +1343,7 @@ func (encoder astSchemaEncoder) astToSchemaOutsidePackage(selector *ast.Selector
 			}
 
 			if typeSpec, ok := structs[selector.Sel.Name]; ok && typeSpec != nil {
-				return encoder.astExprToSchemaRef(typeSpec.Type)
+				return encoder.astExprToSchemaRef(operationName, typeSpec.Type)
 			}
 		}
 	}
@@ -1135,33 +1351,62 @@ func (encoder astSchemaEncoder) astToSchemaOutsidePackage(selector *ast.Selector
 	return nil, nil
 }
 
-func (encoder astSchemaEncoder) astToSchemaRefWithinPackage(ident *ast.Ident) (*openapi3.SchemaRef, error) {
+func (encoder astSchemaEncoder) astToSchemaRefWithinPackage(operationName string, ident *ast.Ident) (*openapi3.SchemaRef, error) {
+	if operationName == debugOperationMethod {
+		fmt.Sprintf("d")
+	}
 	if ident.Obj == nil { // strategy for in another file
-		sourceFileName := strings.ReplaceAll(encoder.sourceFileName, "./", "")
-		sourceDir, _ := filepath.Split(sourceFileName)
-
-		// TODO: dir mapping instead of loop all files
-		for mappingPath, structs := range encoder.structsMapping {
-			//if mappingPath == sourceFileName {
-			//	continue
-			//}
-
-			dir, _ := filepath.Split(mappingPath)
-
-			withinInnerPackage := sourceDir == dir
-
-			if withinInnerPackage {
-				if typeSpec, ok := structs[ident.Name]; ok && typeSpec != nil {
-					return encoder.astExprToSchemaRef(typeSpec.Type)
-				}
-			}
-		}
-
-		return nil, nil
+		return encoder.structNameWithinPkgToSchemaRef(operationName, encoder.sourceDir, ident.Name)
 	}
 
 	if typeSpec, ok := ident.Obj.Decl.(*ast.TypeSpec); ok {
-		return encoder.astExprToSchemaRef(typeSpec.Type)
+		return encoder.astExprToSchemaRef(operationName, typeSpec.Type)
+	}
+
+	return nil, nil
+}
+
+func (encoder astSchemaEncoder) structNameWithinPkgToSchemaRef(operationName, pkgDir, structName string) (*openapi3.SchemaRef, error) {
+	if operationName == debugOperationMethod {
+		fmt.Sprintf("d")
+	}
+
+	// TODO: dir mapping instead of loop all files
+	for mappingPath, structs := range encoder.structsMapping {
+		dir, _ := filepath.Split(mappingPath)
+
+		withinInnerPackage := encoder.samePackageDir(pkgDir, dir)
+
+		if operationName == debugOperationMethod {
+			fmt.Sprintf("d")
+		}
+
+		if withinInnerPackage {
+			if operationName == debugOperationMethod {
+				fmt.Sprintf("d")
+			}
+			if typeSpec, ok := structs[structName]; ok {
+				if operationName == debugOperationMethod {
+					fmt.Sprintf("d")
+				}
+				if typeSpec != nil {
+					if operationName == debugOperationMethod {
+						fmt.Sprintf("d")
+					}
+					ref, err := encoder.astExprToSchemaRef(operationName, typeSpec.Type)
+
+					if operationName == debugOperationMethod {
+						fmt.Sprintf("d")
+					}
+
+					return ref, err
+				}
+			}
+		}
+	}
+
+	if operationName == debugOperationMethod {
+		fmt.Sprintf("d")
 	}
 
 	return nil, nil
@@ -1170,20 +1415,27 @@ func (encoder astSchemaEncoder) astToSchemaRefWithinPackage(ident *ast.Ident) (*
 // e.g interfaceStructName - "AccountsModel", variableName - "accounts", assignExpr - accounts, err := a.accountsModel.GetAccount
 // TODO: check by method name also (interfaceStructMethodName)
 func (encoder astSchemaEncoder) methodWithingPkgToSchemaRef(
+	operationName,
 	interfaceStructName,
 	interfaceStructMethodName,
 	variableName string,
 	assignExpr *ast.AssignStmt,
 ) (schemaRef *openapi3.SchemaRef) {
-	mappingDir, _ := filepath.Split(encoder.sourceFileName)
+	pkgDir := encoder.sourceDir
+	if strings.HasPrefix(pkgDir, "/") {
+		pkgDir = "." + pkgDir // make sure it's relative from root
+	}
 
+	if operationName == debugOperationMethod {
+		fmt.Sprintf("d")
+	}
 	// TODO: cache results (use global variable)
-	filepath.Walk(mappingDir, func(path string, info os.FileInfo, err error) error {
+	filepath.Walk(pkgDir, func(path string, info os.FileInfo, err error) error {
 		if schemaRef != nil {
 			return filepath.SkipDir
 		}
 		if info.IsDir() {
-			if path == mappingDir {
+			if path == pkgDir {
 				return nil
 			}
 			return filepath.SkipDir
@@ -1193,6 +1445,10 @@ func (encoder astSchemaEncoder) methodWithingPkgToSchemaRef(
 		searchNode, err := parser.ParseFile(fset, path, nil, parser.ParseComments) // 1. parse AST for router source file
 		if err != nil {
 			return err
+		}
+
+		if operationName == debugOperationMethod {
+			fmt.Sprintf("d")
 		}
 
 		if obj, ok := searchNode.Scope.Objects[interfaceStructName]; ok {
@@ -1207,7 +1463,26 @@ func (encoder astSchemaEncoder) methodWithingPkgToSchemaRef(
 				return nil
 			}
 
+			if operationName == debugOperationMethod {
+				fmt.Sprintf("d")
+			}
+
 			for _, method := range interfaceType.Methods.List {
+				foundName := false
+				for _, n := range method.Names {
+					if n.Name == interfaceStructMethodName {
+						foundName = true
+					}
+				}
+
+				if !foundName {
+					continue
+				}
+
+				if operationName == debugOperationMethod {
+					fmt.Sprintf("d")
+				}
+
 				methodFun, ok := method.Type.(*ast.FuncType)
 				if !ok {
 					continue
@@ -1237,16 +1512,37 @@ func (encoder astSchemaEncoder) methodWithingPkgToSchemaRef(
 
 				result := methodFun.Results.List[*index]
 
+				if operationName == debugOperationMethod {
+					fmt.Sprintf("d")
+				}
+
 				switch t := result.Type.(type) {
 				case *ast.StarExpr:
-					ref, _ := encoder.astExprToSchemaRef(t.X)
-					schemaRef = ref
-					break
+					if operationName == debugOperationMethod {
+						fmt.Sprintf("d")
+					}
 
+					ref, _ := encoder.astExprToSchemaRef(operationName, t.X)
+
+					if operationName == debugOperationMethod {
+						fmt.Sprintf("d")
+					}
+
+					if !encoder.emptySchemaProperties(ref) {
+						schemaRef = ref
+						break
+					}
 				default:
-					ref, _ := encoder.astExprToSchemaRef(t)
-					schemaRef = ref
-					break
+					if operationName == debugOperationMethod {
+						fmt.Sprintf("d")
+					}
+
+					ref, _ := encoder.astExprToSchemaRef(operationName, t)
+
+					if !encoder.emptySchemaProperties(ref) {
+						schemaRef = ref
+						break
+					}
 				}
 			}
 		}
@@ -1258,5 +1554,26 @@ func (encoder astSchemaEncoder) methodWithingPkgToSchemaRef(
 }
 
 func (encoder astSchemaEncoder) emptySchemaProperties(schemaRef *openapi3.SchemaRef) bool {
-	return schemaRef == nil || schemaRef.Value == nil || schemaRef.Value.Properties == nil || len(schemaRef.Value.Properties) == 0
+	emptyValue := schemaRef == nil || schemaRef.Value == nil
+
+	if emptyValue {
+		return true
+	}
+
+	if schemaRef.Value.Properties == nil || len(schemaRef.Value.Properties) == 0 {
+		if schemaRef.Value.Items == nil || schemaRef.Value.Items.Value == nil || len(schemaRef.Value.Items.Value.Properties) == 0 {
+			return true
+		} else {
+			return false
+		}
+	} else {
+		return false
+	}
+}
+
+func (encoder astSchemaEncoder) samePackageDir(p1, p2 string) bool {
+	p1 = strings.TrimSuffix(strings.TrimPrefix(p1, "/"), "/")
+	p2 = strings.TrimSuffix(strings.TrimPrefix(p2, "/"), "/")
+
+	return p1 == p2
 }

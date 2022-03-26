@@ -1,8 +1,9 @@
-package restlix
+package restflix
 
 import (
 	"fmt"
 	"reflect"
+	"regexp"
 	"runtime"
 	"strings"
 
@@ -16,13 +17,23 @@ func getFunctionName(i interface{}) string {
 
 // TODO: reject middlewares - only last method from router
 // TODO: support multiple method declarations in different files
-func irisRouterStrategy(app *iris.Application, openapi *openapi3.T, searchIdentifiers []*SearchIdentifier, structsMappingRootPath string) error {
+func irisRouterStrategy(app *iris.Application, openapi *openapi3.T, searchIdentifiers []*SearchIdentifier, structsMappingRootPath string, goModName string, ignoreRoutes []string) error {
 	structsMapping, err := mapStructsFromFiles(structsMappingRootPath)
 	if err != nil {
 		return err
 	}
 
+root:
 	for _, route := range app.APIBuilder.GetRoutes() {
+		if ignoreRoutes != nil {
+			for _, pattern := range ignoreRoutes {
+				found, _ := regexp.MatchString(pattern, route.Path)
+				if found {
+					continue root
+				}
+			}
+		}
+
 		sourceFileName := route.SourceFileName
 		findMethod := route.MainHandlerName // github.com/zdunecki/restflix/test/app.(*api).testBaseController-fm
 
@@ -41,7 +52,7 @@ func irisRouterStrategy(app *iris.Application, openapi *openapi3.T, searchIdenti
 			fmt.Sprintf("d")
 		}
 
-		parseRouterMethod(openapi, sourceFileName, findMethod, route, structsMapping, searchIdentifiers)
+		parseRouterMethod(openapi, sourceFileName, findMethod, route, structsMapping, searchIdentifiers, goModName)
 	}
 
 	return nil

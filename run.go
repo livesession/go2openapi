@@ -1,4 +1,4 @@
-package restlix
+package restflix
 
 import (
 	"log"
@@ -63,16 +63,35 @@ func save(openapi *openapi3.T, path string) {
 	}
 }
 
-func Iris(app *iris.Application, searchIdentifiers []*SearchIdentifier, structsMappingRootPath string, savePath string) {
+type Options struct {
+	SearchIdentifiers      []*SearchIdentifier
+	StructsMappingRootPath string
+	SavePath               string
+	GoModName              string
+	IgnoreRoutes           []string
+	iris                   *iris.Application
+}
+
+func (o *Options) WithIris(app *iris.Application) *Options {
+	o.iris = app
+
+	return o
+}
+
+func Init(options *Options) {
 	// wait for router registration
 	go func() {
 		time.Sleep(time.Second * 2)
 
 		openapi := initOpenAPI()
-		if err := irisRouterStrategy(app, openapi, searchIdentifiers, structsMappingRootPath); err != nil {
-			panic(err)
+
+		if options.iris != nil {
+			if err := irisRouterStrategy(options.iris, openapi, options.SearchIdentifiers, options.StructsMappingRootPath, options.GoModName, options.IgnoreRoutes); err != nil {
+				panic(err)
+			}
 		}
-		save(openapi, savePath)
+
+		save(openapi, options.SavePath)
 
 		log.Println("finished openapi with iris strategy")
 	}()

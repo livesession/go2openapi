@@ -1,4 +1,4 @@
-package restlix
+package restflix
 
 //var debugOperationMethod = "[POST]-accounts-google-directory-users"
 

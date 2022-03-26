@@ -79,41 +79,43 @@ func Init() {
 	}
 
 	// simple
-	app.Put("/test-basecontroller/{id:uint64}", a.testBaseController)
-	app.Get("/test-ctx-json-struct/{id:uint64}", a.testCtxJsonStruct)
+	//app.Put("/test-basecontroller/{id:uint64}", a.testBaseController)
+	//app.Get("/test-ctx-json-struct/{id:uint64}", a.testCtxJsonStruct)
 
 	// shortcut properties declaration
-	app.Post("/test-basecontroller-shortcut/{id:uint64}", a.testBaseControllerShortcut)
+	//app.Post("/test-basecontroller-shortcut/{id:uint64}", a.testBaseControllerShortcut)
 
 	// read json
-	app.Post("/test-basecontroller-ctx-read-json/{id:uint64}", a.testBaseControllerCtxReadJson)
+	//app.Post("/test-basecontroller-ctx-read-json/{id:uint64}", a.testBaseControllerCtxReadJson)
 
 	// variable assign
-	app.Delete("/test-ctx-json-variable/{id:uint64}", a.testCtxJsonVariable)
-	app.Delete("/test-basecontroller-request-struct-in-variable/{id:uint64}", a.testBaseControllerRequestStructInVariable)
+	//app.Delete("/test-ctx-json-variable/{id:uint64}", a.testCtxJsonVariable)
+	//app.Delete("/test-basecontroller-request-struct-in-variable/{id:uint64}", a.testBaseControllerRequestStructInVariable)
 
 	// within pkg
-	app.Delete("/test-basecontroller-request-struct-in-different-file/{id:uint64}", a.testBaseControllerRequestStructInDifferentFile)
+	//app.Delete("/test-basecontroller-request-struct-in-different-file/{id:uint64}", a.testBaseControllerRequestStructInDifferentFile)
 
 	// outside pkg
-	app.Delete("/test-basecontroller-request-struct-in-different-file-and-package/{id:uint64}", a.testBaseControllerRequestStructInDifferentFileAndPackage)
+	//app.Delete("/test-basecontroller-request-struct-in-different-file-and-package/{id:uint64}", a.testBaseControllerRequestStructInDifferentFileAndPackage)
 
 	// nested
-	app.Delete("/test-basecontroller-request-struct-nested/{id:uint64}", a.testBaseControllerRequestStructNested)
-
+	//app.Delete("/test-basecontroller-request-struct-nested/{id:uint64}", a.testBaseControllerRequestStructNested)
+	//
 	// map
-	app.Delete("/test-basecontroller-request-struct-map-response/{id:uint64}", a.testBaseControllerRequestStructMapResponse)
+	//app.Delete("/test-basecontroller-request-struct-map-response/{id:uint64}", a.testBaseControllerRequestStructMapResponse)
 
 	// method response within pkg
-	app.Delete("/test-basecontroller-request-struct-method-response/{id:uint64}", a.testBaseControllerRequestStructMetodResponse)
-	app.Delete("/test-basecontroller-request-struct-method-response-inside/{id:uint64}", a.testBaseControllerRequestStructMetodResponseInside)
-	app.Delete("/test-basecontroller-request-struct-method-response-map/{id:uint64}", a.testBaseControllerRequestStructMetodResponseMap)
+	//app.Delete("/test-basecontroller-request-struct-method-response/{id:uint64}", a.testBaseControllerRequestStructMetodResponse)
+	//app.Delete("/test-basecontroller-request-struct-method-response-inside/{id:uint64}", a.testBaseControllerRequestStructMetodResponseInside)
+	//app.Delete("/test-basecontroller-request-struct-method-response-map/{id:uint64}", a.testBaseControllerRequestStructMetodResponseMap)
 
 	// method response outside pkg
-	app.Delete("/test-basecontroller-request-struct-method-response-outside-pkg/{id:uint64}", a.testBaseControllerRequestStructMetodResponseOutSidePkg)
+	//app.Delete("/test-basecontroller-request-struct-method-response-outside-pkg/{id:uint64}", a.testBaseControllerRequestStructMetodResponseOutSidePkg)
+	//app.Delete("/test-basecontroller-request-struct-method-response-outside-pkg-array/{id:uint64}", a.testBaseControllerRequestStructMetodResponseOutSidePkgArray)
+	app.Delete("/test-basecontroller-request-struct-method-response-outside-pkg-array-make/{id:uint64}", a.testBaseControllerRequestStructMetodResponseOutSidePkgArrayMake)
 
 	// middleware
-	app.Delete("/test-basecontroller-middleware/{id:uint64}", middleware, a.testBaseControllerMiddleware)
+	//app.Delete("/test-basecontroller-middleware/{id:uint64}", middleware, a.testBaseControllerMiddleware)
 
 	//routes := app.APIBuilder.GetRoutes()
 	fmt.Println(app.APIBuilder.GetRoutes()[0].MainHandlerName)
@@ -350,4 +352,31 @@ func (a *api) testBaseControllerRequestStructMetodResponseOutSidePkg(ctx iris.Co
 	example()
 
 	ctx.JSON(resp)
+}
+
+func (a *api) testBaseControllerRequestStructMetodResponseOutSidePkgArray(ctx iris.Context) {
+	resp, err := a.modelOutside.GetSomethingArray()
+	if err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		return
+	}
+
+	x := 10
+	if x != 0 {
+		fmt.Println(x)
+	}
+
+	example()
+
+	ctx.JSON(iris.Map{
+		"response": resp,
+	})
+}
+
+func (a *api) testBaseControllerRequestStructMetodResponseOutSidePkgArrayMake(ctx iris.Context) {
+	out := make([]*objects2.ExampleStructInOtherFileAndPackage, 0)
+
+	ctx.JSON(iris.Map{
+		"response": out,
+	})
 }

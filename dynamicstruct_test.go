@@ -1,4 +1,4 @@
-package restlix
+package restflix
 
 import (
 	"encoding/json"
