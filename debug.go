@@ -2,7 +2,8 @@ package restflix
 
 //var debugOperationMethod = "[POST]-accounts-google-directory-users"
 
-var debugOperationMethod = "[GET]-agents-exports"
+//var debugOperationMethod = "[GET]-agents-exports"
+var debugOperationMethod = "[DELETE]-test-basecontroller-request-struct-test"
 
 // POST /accounts/google-directory/users -> users any
 // POST /agents -> agents any

@@ -112,7 +112,13 @@ func Init() {
 	// method response outside pkg
 	//app.Delete("/test-basecontroller-request-struct-method-response-outside-pkg/{id:uint64}", a.testBaseControllerRequestStructMetodResponseOutSidePkg)
 	//app.Delete("/test-basecontroller-request-struct-method-response-outside-pkg-array/{id:uint64}", a.testBaseControllerRequestStructMetodResponseOutSidePkgArray)
-	app.Delete("/test-basecontroller-request-struct-method-response-outside-pkg-array-make/{id:uint64}", a.testBaseControllerRequestStructMetodResponseOutSidePkgArrayMake)
+	//app.Delete("/test-basecontroller-request-struct-method-response-outside-pkg-array-make/{id:uint64}", a.testBaseControllerRequestStructMetodResponseOutSidePkgArrayMake)
+	//app.Delete("/test-basecontroller-request-struct-method-response-outside-pkg-array-make-nested/{id:uint64}", a.testBaseControllerRequestStructMetodResponseOutSidePkgArrayMakeNested)
+
+	app.Delete("/test-basecontroller-request-struct-test", a.testBaseControllerRequestStructTEST)
+
+	// var declaration
+	//app.Delete("/test-basecontroller-struct-method-response-var-declaration-mix", a.testBaseControllerStructMetodResponseVarDeclarationMix)
 
 	// middleware
 	//app.Delete("/test-basecontroller-middleware/{id:uint64}", middleware, a.testBaseControllerMiddleware)
@@ -378,5 +384,56 @@ func (a *api) testBaseControllerRequestStructMetodResponseOutSidePkgArrayMake(ct
 
 	ctx.JSON(iris.Map{
 		"response": out,
+	})
+}
+
+func (a *api) testBaseControllerRequestStructMetodResponseOutSidePkgArrayMakeNested(ctx iris.Context) {
+	out := &objects2.ExampleStructInOtherFileAndPackageNested{
+		X: make([]*objects2.ExampleStructInOtherFileAndPackage, 0),
+	}
+
+	ctx.JSON(iris.Map{
+		"response": out,
+	})
+}
+
+func (a *api) testBaseControllerRequestStructTEST(ctx iris.Context) {
+	req := &objects2.CreateAgentsBatchRequest{}
+	if err := a.ValidateBody(ctx, req); err != nil {
+		a.BaseController.InternalError(ctx, errors.New("validation error"))
+		return
+	}
+
+	/*
+		TODO:
+		1. ctx.JSON(iris.Map{})
+
+		2. ctx.JSON(iris.Map{
+			"abc": &objects2.CreateAgentRequest{
+				Email: "email",
+				Role:  "role",
+			},
+		})
+
+		3.
+	*/
+
+	ctx.JSON(iris.Map{
+		"abc": &objects2.CreateAgentRequest{
+			Email: "email",
+			Role:  "role",
+		},
+	})
+}
+
+func (a *api) testBaseControllerStructMetodResponseVarDeclarationMix(ctx iris.Context) {
+	var (
+		x  *objects2.ExampleStructInOtherFileAndPackageNested
+		x2 exampleStructInOtherFile
+	)
+
+	ctx.JSON(iris.Map{
+		"response":  x,
+		"response2": x2,
 	})
 }
