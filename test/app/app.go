@@ -398,32 +398,97 @@ func (a *api) testBaseControllerRequestStructMetodResponseOutSidePkgArrayMakeNes
 }
 
 func (a *api) testBaseControllerRequestStructTEST(ctx iris.Context) {
-	req := &objects2.CreateAgentsBatchRequest{}
-	if err := a.ValidateBody(ctx, req); err != nil {
+	//req := &objects2.CreateAgentsBatchRequest{}
+	//if err := a.ValidateBody(ctx, req); err != nil {
+	//	a.BaseController.InternalError(ctx, errors.New("validation error"))
+	//	return
+	//}
+
+	// TODO:
+	// 1.
+	//ctx.JSON(iris.Map{
+	//	"abc": &objects2.CreateAgentRequest{
+	//		Email: "email",
+	//		Role:  "role",
+	//	},
+	//})
+
+	// 2.
+	//ctx.JSON(iris.Map{
+	//	"abc": []*objects2.CreateAgentRequest{
+	//		{
+	//			Email: "email",
+	//			Role:  "role",
+	//		},
+	//	},
+	//})
+
+	// 3.
+	//success := true
+	//errors, err := a.methodErrors()
+	//if err != nil {
+	//	a.BaseController.InternalError(ctx, err)
+	//	return
+	//}
+	//
+	//ctx.JSON(iris.Map{
+	//	"success": success,
+	//	"errors":  errors,
+	//})
+
+	// 4.
+	//successBool := true
+	//var successBool bool
+	//successInt := 50
+	//successSlice := []string{}
+	//successSlice2 := []bool{}
+	//successSlice3 := []int{}
+	//successSlice4 := []float64{}
+	//
+	//successFloat := 20.50
+	//successString := "s"
+
+	//ctx.JSON(iris.Map{
+	//	"success_bool": successBool,
+	//	//"success_string": successString,
+	//	//"success_int":    successInt,
+	//	//"success_slice":  successSlice,
+	//	//"success_slice2": successSlice2,
+	//	//"success_slice3": successSlice3,
+	//	//"success_slice4": successSlice4,
+	//	//"success_float":  successFloat,
+	//})
+
+	// 5. methodErrorsV2
+
+	// 6. embedded
+	//ctx.JSON(&objects2.ExampleEmbeddedParent{})
+
+	// 7. nested import struct
+
+	// 8. get type from variable function
+
+	// 9 . nested selector from struct
+	//s := &objects2.ExampleEmbeddedParent{}
+	//
+	//ctx.JSON(iris.Map{
+	//	"recording_elements": s.RecordingElements.Deeper.RecordingElement,
+	//})
+
+	// 10 . nested selector from returned value (method)
+	s, err := a.modelOutside.GetSomethingNested()
+	if err != nil {
 		a.BaseController.InternalError(ctx, errors.New("validation error"))
 		return
 	}
 
-	/*
-		TODO:
-		1. ctx.JSON(iris.Map{})
-
-		2. ctx.JSON(iris.Map{
-			"abc": &objects2.CreateAgentRequest{
-				Email: "email",
-				Role:  "role",
-			},
-		})
-
-		3.
-	*/
-
 	ctx.JSON(iris.Map{
-		"abc": &objects2.CreateAgentRequest{
-			Email: "email",
-			Role:  "role",
-		},
+		"recording_elements": s.RecordingElements.Deeper.RecordingElement,
 	})
+}
+
+func (a *api) methodErrors() ([]error, error) {
+	return a.modelOutside.Errors()
 }
 
 func (a *api) testBaseControllerStructMetodResponseVarDeclarationMix(ctx iris.Context) {
