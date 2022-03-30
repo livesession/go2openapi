@@ -22,4 +22,4 @@ var debugOperationMethod = "[PUT]-agents-websites-:website_id-recording-elements
 // POST /agents/funnels => BUG (array of objects)
 // PUT /agents/funnels => BUG (array of objects)
 // POST /agents/funnels/compute => BUG (custom types)
-// PUT /agents/websites/:website_id/recording-elements => BUG (type from variable statement (function return), nested selector)
+// PUT /agents/websites/:website_id/recording-elements => BUG (type from variable statement (function return), nested selector) => FIXED?

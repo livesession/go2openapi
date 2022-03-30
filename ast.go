@@ -1344,6 +1344,9 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(operationName string, expr a
 	}
 
 	deepSelectorToSchemaRef = func(operationName string, expr ast.Expr, fieldPath []string) (*openapi3.SchemaRef, error) {
+		if operationName == debugOperationMethod {
+			fmt.Sprintf("d")
+		}
 		if fieldPath == nil {
 			fieldPath = make([]string, 0)
 		}
@@ -1354,6 +1357,10 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(operationName string, expr a
 
 			return deepSelectorToSchemaRef(operationName, t.X, fieldPath)
 		case *ast.Ident:
+			if t == nil || t.Obj == nil || t.Obj.Decl == nil {
+				return nil, nil
+			}
+
 			assign, ok := t.Obj.Decl.(*ast.AssignStmt)
 			if !ok {
 				return nil, nil
@@ -1482,6 +1489,14 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(operationName string, expr a
 			if operationName == debugOperationMethod {
 				fmt.Sprintf("d")
 			}
+
+			if ref, err := deepSelectorToSchemaRef(operationName, t, make([]string, 0)); err != nil {
+				return nil, err
+			} else if !encoder.emptySchema(ref) {
+				properties = ref.Value.Properties
+				break
+			}
+
 			switch tx := t.X.(type) {
 			case *ast.Ident:
 				if ref, _ := encoder.astExprToSchemaRef(operationName, t.X); ref != nil {
