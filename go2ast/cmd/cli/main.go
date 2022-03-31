@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/zdunecki/restflix/go2ast"
+	"github.com/livesession/restflix/go2ast"
 )
 
 func main() {

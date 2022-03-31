@@ -8,7 +8,7 @@ import (
 
 	"github.com/kataras/iris/v12"
 	"github.com/kataras/iris/v12/context"
-	objects2 "github.com/zdunecki/restflix/test/app/objects"
+	objects2 "github.com/livesession/restflix/test/app/objects"
 )
 
 var app *iris.Application
