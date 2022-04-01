@@ -42,6 +42,7 @@ type SearchIdentifier struct {
 // TODO: if pointer it can be also null in response (e.g openapi examples, schema)
 // TODO: get type from condition e.g use_three_d_secure := something.abc && something.bca
 // TODO: iris.Map{} -> {}
+// TODO: nested import array of types
 func parseRouterMethod(
 	openapi *openapi3.T,
 	sourceFileName string,
@@ -1081,6 +1082,9 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(operationName string, expr a
 				}
 
 				schemaRefFromIdent := func(ident *ast.Ident) *openapi3.SchemaRef {
+					if operationName == debugOperationMethod {
+						fmt.Sprintf("d")
+					}
 					if ident.Obj != nil { // it's struct
 						typeSpec := ident.Obj.Decl.(*ast.TypeSpec)
 						nestedSchemaRef, err := encoder.astExprToSchemaRef(operationName, typeSpec.Type)
@@ -1103,13 +1107,15 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(operationName string, expr a
 
 					return nil, "", nil
 				case *ast.StarExpr:
-					ident, ok := t.X.(*ast.Ident)
-					if ok {
-						if ref := schemaRefFromIdent(ident); ref != nil {
-							return ref, tag.Name, nil
-						}
+					if operationName == debugOperationMethod {
+						fmt.Sprintf("d")
+					}
+					if ref, err := encoder.astExprToSchemaRef(operationName, t.X); ref != nil {
+						arrRef := schemaRefArrayOfObject(ref.Value.Properties)
 
-						return nil, "", nil
+						return arrRef, tag.Name, nil
+					} else if err != nil {
+						return nil, "", err
 					}
 				}
 			}
@@ -1150,10 +1156,17 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(operationName string, expr a
 	}
 
 	parseStructType := func(structType *ast.StructType) error {
+		if debugOperationMethod == operationName {
+			fmt.Sprintf("d")
+		}
 		for _, field := range structType.Fields.List {
 			ref, name, embedded, err := schemaRefFromStructField(field)
 			if err != nil {
 				return err
+			}
+
+			if debugOperationMethod == operationName {
+				fmt.Sprintf("d")
 			}
 
 			if ref != nil {
