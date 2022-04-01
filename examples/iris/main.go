@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/zdunecki/restflix"
-	"github.com/zdunecki/restflix/test/app"
+	"github.com/livesession/restflix"
+	"github.com/livesession/restflix/test/app"
 )
 
 // TODO: support methods and functions
@@ -22,7 +22,7 @@ func main() {
 		},
 		StructsMappingRootPath: "./test",
 		SavePath:               "",
-		GoModName:              "github.com/zdunecki/restflix",
+		GoModName:              "github.com/livesession/restflix",
 	}).
 		WithIris(app.App()),
 	)

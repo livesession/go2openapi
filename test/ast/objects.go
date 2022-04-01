@@ -1,6 +1,6 @@
 package ast
 
-import "github.com/zdunecki/restflix/test/ast/objects"
+import "github.com/livesession/restflix/test/ast/objects"
 
 // TODO: check pointers
 

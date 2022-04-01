@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/zdunecki/restflix/go2ast"
+	"github.com/livesession/restflix/go2ast"
 )
 
 //	TODO: check this conecpt

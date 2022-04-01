@@ -35,7 +35,7 @@ root:
 		}
 
 		sourceFileName := route.SourceFileName
-		findMethod := route.MainHandlerName // github.com/zdunecki/restflix/test/app.(*api).testBaseController-fm
+		findMethod := route.MainHandlerName // github.com/livesession/restflix/test/app.(*api).testBaseController-fm
 
 		lastHandler := route.Handlers[len(route.Handlers)-1]
 		handlerName := getFunctionName(lastHandler)

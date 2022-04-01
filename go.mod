@@ -1,4 +1,4 @@
-module github.com/zdunecki/restflix
+module github.com/livesession/restflix
 
 go 1.13
 
