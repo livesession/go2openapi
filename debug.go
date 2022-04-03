@@ -3,7 +3,7 @@ package restflix
 //var debugOperationMethod = "[POST]-accounts-google-directory-users"
 
 //var debugOperationMethod = "[GET]-agents-exports"
-var debugOperationMethod = "[GET]-crm-accounts-:account_id-logs"
+var debugOperationMethod = "[POST]-agents-exports"
 
 // POST /accounts/google-directory/users -> users any => DONE
 // POST /agents -> agents any => DONE

@@ -5,9 +5,11 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -16,11 +18,25 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/kataras/iris/v12/core/router"
 	gogitignore "github.com/sabhiram/go-gitignore"
+	"golang.org/x/mod/modfile"
 )
 
 type SearchIdentifier struct {
 	MethodStatement  []string
 	ArgumentPosition int
+}
+
+var goModReplace map[string]string
+
+func init() {
+	fB, _ := ioutil.ReadFile("./go.mod")
+	modFile, _ := modfile.Parse("go.mod", fB, nil)
+
+	goModReplace = make(map[string]string)
+
+	for _, x := range modFile.Replace {
+		goModReplace[x.Old.Path] = x.New.Path
+	}
 }
 
 /*
@@ -43,12 +59,13 @@ type SearchIdentifier struct {
 // TODO: get type from condition e.g use_three_d_secure := something.abc && something.bca
 // TODO: iris.Map{} -> {}
 // TODO: nested import array of types
+// TODO: support types outside of module
 func parseRouterMethod(
 	openapi *openapi3.T,
 	sourceFileName string,
 	findMethodStatement string,
 	route *router.Route,
-	structsMapping map[string]map[string]*ast.TypeSpec,
+	structsMapping map[string]map[string]map[string]*ast.TypeSpec,
 	searchIdentifiers []*SearchIdentifier,
 	goModName string,
 ) {
@@ -199,7 +216,7 @@ root:
 func parseHandlerBodyAST(
 	node *ast.File,
 	sourceFileName string,
-	structsMapping map[string]map[string]*ast.TypeSpec,
+	structsMapping map[string]map[string]map[string]*ast.TypeSpec,
 	operationName string,
 	searchIdentifiers []*SearchIdentifier,
 	exp ast.Expr,
@@ -295,7 +312,7 @@ func parseHandlerBodyAST(
 
 func parseHandlerResponseAST(
 	node *ast.File,
-	structsMapping map[string]map[string]*ast.TypeSpec,
+	structsMapping map[string]map[string]map[string]*ast.TypeSpec,
 	sourceFileName string,
 	exp ast.Expr,
 	operationName string,
@@ -321,7 +338,7 @@ func parseHandlerResponseAST(
 		operation.Responses.Default().Value = responseJSON
 	}
 
-	parseContextJSONStruct := func(structsMapping map[string]map[string]*ast.TypeSpec, compositeList *ast.CompositeLit) bool {
+	parseContextJSONStruct := func(structsMapping map[string]map[string]map[string]*ast.TypeSpec, compositeList *ast.CompositeLit) bool {
 		if operationName == debugOperationMethod {
 			fmt.Sprintf("d")
 		}
@@ -617,7 +634,7 @@ func matchCallExpression(operationName string, searchIdentifiers []*SearchIdenti
 	return
 }
 
-func mapStructsFromFiles(root string) (map[string]map[string]*ast.TypeSpec, error) {
+func mapStructsFromFiles(goMod, root string, require map[string]bool, relative bool) (map[string]map[string]map[string]*ast.TypeSpec, error) {
 	walkRook := "."
 	if root != "" {
 		walkRook = root
@@ -629,7 +646,11 @@ func mapStructsFromFiles(root string) (map[string]map[string]*ast.TypeSpec, erro
 	}
 
 	// per file path, per struct name
-	out := make(map[string]map[string]*ast.TypeSpec)
+	out := make(map[string]map[string]map[string]*ast.TypeSpec)
+
+	if _, ok := out[goMod]; !ok {
+		out[goMod] = make(map[string]map[string]*ast.TypeSpec)
+	}
 
 	// TODO: pass root folder to omit every folder checking
 	return out, filepath.Walk(walkRook, func(path string, f os.FileInfo, err error) error {
@@ -664,8 +685,34 @@ func mapStructsFromFiles(root string) (map[string]map[string]*ast.TypeSpec, erro
 
 		// TODO: check if absolute - if yes remove prefix  ~/Code/zdunecki -> prefix
 
-		if _, ok := out[path]; !ok {
-			out[path] = make(map[string]*ast.TypeSpec)
+		outPath := path
+		if relative {
+			outPath = strings.TrimPrefix(outPath, root)
+			outPath = strings.TrimPrefix(outPath, "/")
+		}
+
+		if _, ok := out[goMod][outPath]; !ok {
+			out[goMod][outPath] = make(map[string]*ast.TypeSpec)
+		}
+
+		fB, _ := ioutil.ReadFile("./go.mod")
+		modFile, _ := modfile.Parse("go.mod", fB, nil)
+
+		// TODO: support non replace (require too)
+		for _, r := range modFile.Replace {
+			if _, ok := out[r.Old.Path]; ok {
+				break
+			}
+			if _, ok := require[r.Old.Path]; ok {
+
+				// TODO: support non path packages
+				mapping, err := mapStructsFromFiles(r.Old.Path, r.New.Path, nil, true)
+				if err != nil {
+					return err
+				}
+
+				out[r.Old.Path] = mapping[r.Old.Path]
+			}
 		}
 
 		if node.Scope != nil {
@@ -675,8 +722,8 @@ func mapStructsFromFiles(root string) (map[string]map[string]*ast.TypeSpec, erro
 					continue
 				}
 
-				if _, ok := out[path][typeSpec.Name.Name]; !ok {
-					out[path][typeSpec.Name.Name] = typeSpec
+				if _, ok := out[goMod][outPath][typeSpec.Name.Name]; !ok {
+					out[goMod][outPath][typeSpec.Name.Name] = typeSpec
 				}
 			}
 		}
@@ -687,7 +734,7 @@ func mapStructsFromFiles(root string) (map[string]map[string]*ast.TypeSpec, erro
 
 type astSchemaEncoder struct {
 	node           *ast.File
-	structsMapping map[string]map[string]*ast.TypeSpec
+	structsMapping map[string]map[string]map[string]*ast.TypeSpec
 	sourceDir      string
 	goModName      string
 }
@@ -967,6 +1014,7 @@ func removeSliceString(s []string, i int) []string {
 func (encoder *astSchemaEncoder) astExprToSchemaRef(operationName string, expr ast.Expr) (*openapi3.SchemaRef, error) {
 	var schemaRefFromStructField func(field *ast.Field) (*openapi3.SchemaRef, string, bool, error)
 	var deepSelectorToSchemaRef func(operationName string, expr ast.Expr, fieldPath []string) (*openapi3.SchemaRef, error)
+	var schemaRefFromIdent func(ident *ast.Ident) *openapi3.SchemaRef
 
 	properties := make(openapi3.Schemas) // TODO: not always properties - sometimes primitive types or array of structs
 
@@ -974,12 +1022,25 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(operationName string, expr a
 		fmt.Sprintf("d")
 	}
 
-	schemaRefFromIdent := func(ident *ast.Ident) *openapi3.SchemaRef {
+	schemaRefFromIdent = func(ident *ast.Ident) *openapi3.SchemaRef {
+		if ident.Obj != nil && ident.Obj.Decl != nil { // primitive custom type
+			if t, ok := ident.Obj.Decl.(*ast.TypeSpec); ok {
+				switch tx := t.Type.(type) {
+				case *ast.Ident:
+					return schemaRefFromIdent(tx)
+				default:
+					ref, _ := encoder.astExprToSchemaRef(operationName, tx)
+
+					return ref
+				}
+			}
+		}
+
 		return &openapi3.SchemaRef{
 			Ref: "",
 			Value: &openapi3.Schema{
 				Type:    ident.Name,
-				Example: getTypeDefaultValue(ident.Name),
+				Example: getPrimitiveTypeDefaultValue(ident.Name),
 			},
 		}
 	}
@@ -1032,24 +1093,33 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(operationName string, expr a
 			return nil, "", false, err
 		}
 
+		if operationName == debugOperationMethod {
+			fmt.Sprintf("d")
+		}
 		parseExpr = func(expr ast.Expr) (*openapi3.SchemaRef, string, error) {
 			switch t := expr.(type) {
 			case *ast.StarExpr:
 				return parseExpr(t.X)
 			case *ast.Ident: // &req{}
-				if ref, _ := encoder.astToSchemaRefWithinPackage(operationName, t); ref != nil {
+				if ref, _ := encoder.astToSchemaRefWithinPackage(operationName, t); ref != nil && !encoder.emptySchema(ref) {
 					if operationName == debugOperationMethod {
 						fmt.Sprintf("d")
 					}
+
 					return ref, tag.Name, err
 				}
+
+				r := schemaRefFromIdent(t)
 
 				if operationName == debugOperationMethod {
 					fmt.Sprintf("d")
 				}
 
-				return schemaRefFromIdent(t), tag.Name, nil
+				return r, tag.Name, nil
 			case *ast.SelectorExpr: // &pkg.req{}
+				if operationName == debugOperationMethod {
+					fmt.Sprintf("d")
+				}
 				if ref, _ := encoder.astToSchemaOutsidePackage(operationName, t); ref != nil {
 					if operationName == debugOperationMethod {
 						fmt.Sprintf("d")
@@ -1127,7 +1197,15 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(operationName string, expr a
 			return nil, "", nil
 		}
 
+		if operationName == debugOperationMethod {
+			fmt.Sprintf("d")
+		}
+
 		ref, name, err := parseExpr(field.Type)
+
+		if operationName == debugOperationMethod {
+			fmt.Sprintf("d")
+		}
 
 		if ref != nil {
 			if ref.Value.Extensions == nil {
@@ -1150,7 +1228,7 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(operationName string, expr a
 			Ref: "",
 			Value: &openapi3.Schema{
 				Type:    valType,
-				Example: getTypeDefaultValue(valType),
+				Example: getPrimitiveTypeDefaultValue(valType),
 			},
 		}
 	}
@@ -1284,7 +1362,7 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(operationName string, expr a
 				Ref: "",
 				Value: &openapi3.Schema{
 					Type:    valType,
-					Example: getTypeDefaultValue(valType),
+					Example: getPrimitiveTypeDefaultValue(valType),
 				},
 			}
 		case *ast.CompositeLit:
@@ -1463,6 +1541,14 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(operationName string, expr a
 			fmt.Sprintf("d")
 		}
 		if t.Obj == nil {
+			if _, ok := primitiveTypeZeroValue[t.Name]; ok {
+				if operationName == debugOperationMethod {
+					fmt.Sprintf("d")
+				}
+				if ref := schemaRefFromIdent(t); ref != nil {
+					return ref, nil
+				}
+			}
 			if ref, _ := encoder.astToSchemaRefWithinPackage(operationName, t); ref != nil {
 				if operationName == debugOperationMethod {
 					fmt.Sprintf("d")
@@ -1493,36 +1579,64 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(operationName string, expr a
 		if operationName == debugOperationMethod {
 			fmt.Sprintf("d")
 		}
-		if ref, _ := encoder.astToSchemaOutsidePackage(operationName, t); ref != nil {
-			if operationName == debugOperationMethod {
-				fmt.Sprintf("d")
-			}
-			properties = ref.Value.Properties
-		} else {
-			if operationName == debugOperationMethod {
-				fmt.Sprintf("d")
-			}
 
-			if ref, err := deepSelectorToSchemaRef(operationName, t, make([]string, 0)); err != nil {
-				return nil, err
-			} else if !encoder.emptySchema(ref) {
+		ref, err := encoder.astToSchemaOutsidePackage(operationName, t)
+		if err != nil {
+			return nil, err
+		}
+		if !encoder.emptySchema(ref) {
+			if operationName == debugOperationMethod {
+				fmt.Sprintf("d")
+			}
+			if encoder.emptySchemaPropertiesOrItems(ref) {
+				return ref, nil
+			} else {
 				properties = ref.Value.Properties
 				break
 			}
+		}
 
-			switch tx := t.X.(type) {
-			case *ast.Ident:
-				if ref, _ := encoder.astExprToSchemaRef(operationName, t.X); ref != nil {
-					if operationName == debugOperationMethod {
-						fmt.Sprintf("d")
-					}
-					properties = ref.Value.Properties
+		ref, err = deepSelectorToSchemaRef(operationName, t, make([]string, 0))
+		if err != nil {
+			return nil, err
+		}
+		if !encoder.emptySchema(ref) {
+			if operationName == debugOperationMethod {
+				fmt.Sprintf("d")
+			}
+			if encoder.emptySchemaPropertiesOrItems(ref) {
+				return ref, nil
+			} else {
+				properties = ref.Value.Properties
+				break
+			}
+		}
+
+		switch tx := t.X.(type) {
+		case *ast.Ident:
+			ref, err = encoder.astExprToSchemaRef(operationName, t.X)
+			if !encoder.emptySchema(ref) {
+				if operationName == debugOperationMethod {
+					fmt.Sprintf("d")
 				}
-			case *ast.SelectorExpr: // nested selector
-				ref, _ := deepSelectorToSchemaRef(operationName, tx, make([]string, 0))
-
-				if ref != nil {
+				if encoder.emptySchemaPropertiesOrItems(ref) {
+					return ref, nil
+				} else {
 					properties = ref.Value.Properties
+					break
+				}
+			}
+		case *ast.SelectorExpr: // nested selector
+			ref, err = deepSelectorToSchemaRef(operationName, tx, make([]string, 0))
+			if !encoder.emptySchema(ref) {
+				if operationName == debugOperationMethod {
+					fmt.Sprintf("d")
+				}
+				if encoder.emptySchemaPropertiesOrItems(ref) {
+					return ref, nil
+				} else {
+					properties = ref.Value.Properties
+					break
 				}
 			}
 		}
@@ -1567,6 +1681,13 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(operationName string, expr a
 				}
 			} else {
 				properties = schemaRef.Value.Properties
+				if operationName == debugOperationMethod {
+					fmt.Sprintf("d")
+				}
+			}
+
+			if operationName == debugOperationMethod {
+				fmt.Sprintf("d")
 			}
 		case *ast.ArrayType: // primitive array type
 			if ident, ok := tt.Elt.(*ast.Ident); ok {
@@ -1653,8 +1774,85 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(operationName string, expr a
 }
 
 func (encoder astSchemaEncoder) astToSchemaOutsidePackage(operationName string, selector *ast.SelectorExpr) (*openapi3.SchemaRef, error) {
+	var searchPackage func(mapping map[string]map[string]*ast.TypeSpec, nodeImportPath string, deep bool) (*openapi3.SchemaRef, error)
+
+	searchPackage = func(mapping map[string]map[string]*ast.TypeSpec, nodeImportPath string, deep bool) (*openapi3.SchemaRef, error) {
+		// TODO: dir mapping instead of loop all files
+		if operationName == debugOperationMethod {
+			fmt.Sprintf("")
+		}
+		for mappingPath, structs := range mapping { // strategy for in another pkg
+			mappingDir, _ := filepath.Split(mappingPath)
+
+			if strings.HasSuffix(mappingDir, "/") {
+				mappingDir = mappingDir[:len(mappingDir)-1]
+			}
+			if !strings.HasSuffix(nodeImportPath, mappingDir) {
+				continue
+			}
+
+			module := encoder.githubModule(nodeImportPath)
+
+			// strategy for outside module import
+			if deep && module != "" {
+				if moduleMapping, ok := encoder.structsMapping[module]; ok {
+					ref, err := searchPackage(moduleMapping, nodeImportPath, false) // TODO: deep
+					if err != nil {
+						return nil, err
+					}
+
+					if operationName == debugOperationMethod {
+						fmt.Sprintf("")
+					}
+
+					if !encoder.emptySchema(ref) {
+						return ref, nil
+					}
+				}
+			}
+
+			if module != "" && module != encoder.goModName { // TODO: optimization - only once
+				if operationName == debugOperationMethod {
+					fmt.Sprintf("", goModReplace)
+				}
+				if replacePath, ok := goModReplace[module]; ok {
+					mappingPath = path.Join(replacePath, mappingPath)
+				}
+			}
+
+			if typeSpec, ok := structs[selector.Sel.Name]; ok && typeSpec != nil {
+				fset := token.NewFileSet()
+				node, err := parser.ParseFile(fset, mappingPath, nil, parser.ParseComments) // 1. parse AST for router source file
+				if err != nil {
+					fmt.Println(err)
+				}
+
+				nestedEncoder := &astSchemaEncoder{
+					node:           node,
+					structsMapping: encoder.structsMapping,
+					sourceDir:      mappingDir,
+					goModName:      encoder.goModName,
+				}
+
+				if operationName == debugOperationMethod {
+					fmt.Sprintf("d")
+				}
+
+				ref, err := nestedEncoder.astExprToSchemaRef(operationName, typeSpec.Type)
+
+				return ref, err
+			}
+		}
+
+		return nil, nil
+	}
+
 	for _, nodeImport := range encoder.node.Imports { // search struct inside imports
 		importName, nodeImportPath := getImportPkgName(nodeImport)
+
+		if operationName == debugOperationMethod {
+			fmt.Sprintf("d")
+		}
 
 		ident, ok := selector.X.(*ast.Ident)
 		if !ok {
@@ -1665,21 +1863,7 @@ func (encoder astSchemaEncoder) astToSchemaOutsidePackage(operationName string, 
 			continue
 		}
 
-		// TODO: dir mapping instead of loop all files
-		for mappingPath, structs := range encoder.structsMapping { // strategy for in another pkg
-			mappingDir, _ := filepath.Split(mappingPath)
-
-			if strings.HasSuffix(mappingDir, "/") {
-				mappingDir = mappingDir[:len(mappingDir)-1]
-			}
-			if !strings.HasSuffix(nodeImportPath, mappingDir) {
-				continue
-			}
-
-			if typeSpec, ok := structs[selector.Sel.Name]; ok && typeSpec != nil {
-				return encoder.astExprToSchemaRef(operationName, typeSpec.Type)
-			}
-		}
+		return searchPackage(encoder.structsMapping[encoder.goModName], nodeImportPath, true)
 	}
 
 	return nil, nil
@@ -1706,7 +1890,7 @@ func (encoder astSchemaEncoder) structNameWithinPkgToSchemaRef(operationName, pk
 	}
 
 	// TODO: dir mapping instead of loop all files
-	for mappingPath, structs := range encoder.structsMapping {
+	for mappingPath, structs := range encoder.structsMapping[encoder.goModName] {
 		dir, _ := filepath.Split(mappingPath)
 
 		withinInnerPackage := encoder.samePackageDir(pkgDir, dir)
@@ -1882,13 +2066,23 @@ func (encoder astSchemaEncoder) emptySchema(schemaRef *openapi3.SchemaRef) bool 
 		return true
 	}
 
+	if encoder.emptySchemaPropertiesOrItems(schemaRef) {
+		return schemaRef.Value.Type == ""
+	}
+
+	return false
+}
+
+func (encoder astSchemaEncoder) emptySchemaPropertiesOrItems(schemaRef *openapi3.SchemaRef) bool {
+	emptyValue := schemaRef == nil || schemaRef.Value == nil
+
+	if emptyValue {
+		return true
+	}
+
 	if schemaRef.Value.Properties == nil || len(schemaRef.Value.Properties) == 0 {
 		if schemaRef.Value.Items == nil || schemaRef.Value.Items.Value == nil || len(schemaRef.Value.Items.Value.Properties) == 0 {
-			if schemaRef.Value.Type == "" {
-				return true
-			} else {
-				return false
-			}
+			return true
 		} else {
 			return false
 		}
@@ -1902,6 +2096,16 @@ func (encoder astSchemaEncoder) samePackageDir(p1, p2 string) bool {
 	p2 = strings.TrimSuffix(strings.TrimPrefix(p2, "/"), "/")
 
 	return p1 == p2
+}
+
+// TODO: support another type of packages
+func (encoder astSchemaEncoder) githubModule(p1 string) string {
+	splitted := strings.Split(p1, "/")
+	if len(splitted) < 3 {
+		return ""
+	}
+
+	return strings.Join(splitted[:3], "/")
 }
 
 func (encoder astSchemaEncoder) searchVariableInAssign(variableName string, assignExpr *ast.AssignStmt) (index *int) {

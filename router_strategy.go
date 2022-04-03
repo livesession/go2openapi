@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/getkin/kin-openapi/openapi3"
-	"github.com/kataras/iris/v12"
 )
 
 func getFunctionName(i interface{}) string {
@@ -17,8 +16,11 @@ func getFunctionName(i interface{}) string {
 
 // TODO: reject middlewares - only last method from router
 // TODO: support multiple method declarations in different files
-func irisRouterStrategy(app *iris.Application, openapi *openapi3.T, searchIdentifiers []*SearchIdentifier, structsMappingRootPath string, goModName string, ignoreRoutes []string) error {
-	structsMapping, err := mapStructsFromFiles(structsMappingRootPath)
+func irisRouterStrategy(options *Options, openapi *openapi3.T) error {
+	app, searchIdentifiers, structsMappingRootPath, goModName, ignoreRoutes, require :=
+		options.iris, options.SearchIdentifiers, options.StructsMappingRootPath, options.GoModName, options.IgnoreRoutes, options.Require
+
+	structsMapping, err := mapStructsFromFiles(options.GoModName, structsMappingRootPath, require, false)
 	if err != nil {
 		return err
 	}

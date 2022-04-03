@@ -476,15 +476,21 @@ func (a *api) testBaseControllerRequestStructTEST(ctx iris.Context) {
 	//})
 
 	// 10 . nested selector from returned value (method)
-	s, err := a.modelOutside.GetSomethingNested()
-	if err != nil {
-		a.BaseController.InternalError(ctx, errors.New("validation error"))
-		return
-	}
+	//s, err := a.modelOutside.GetSomethingNested()
+	//	if err != nil {
+	//		a.BaseController.InternalError(ctx, errors.New("validation error"))
+	//		return
+	//	}
+	//
+	//	ctx.JSON(iris.Map{
+	//		"recording_elements": s.RecordingElements.Deeper.CreatedBy,
+	//	})
 
-	ctx.JSON(iris.Map{
-		"recording_elements": s.RecordingElements.Deeper.RecordingElement,
-	})
+	// 11 . custom struct type
+	//ctx.JSON(&objects2.CustomStruct{})
+
+	// 11. custom struct - livesesion
+	ctx.JSON(&objects2.CreateExportRequest{})
 }
 
 func (a *api) methodErrors() ([]error, error) {

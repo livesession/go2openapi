@@ -34,17 +34,31 @@ func reverseSliceString(s []string) {
 	}
 }
 
+var primitiveTypeZeroValue = map[string]interface{}{
+	"string":  "",
+	"int":     0,
+	"int8":    0,
+	"int16":   0,
+	"int32":   0,
+	"int64":   0,
+	"uint":    0,
+	"uint8":   0,
+	"uint16":  0,
+	"uint32":  0,
+	"uint64":  0,
+	"float":   0.0,
+	"float32": 0.0,
+	"float64": 0.0,
+	"bool":    false,
+}
+
 // TODO: pointers
-func getTypeDefaultValue(typ string) interface{} {
+func getPrimitiveTypeDefaultValue(typ string) interface{} {
+	if v, ok := primitiveTypeZeroValue[typ]; ok {
+		return v
+	}
+
 	switch typ {
-	case "string":
-		return ""
-	case "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64":
-		return 0
-	case "float", "float32", "float64":
-		return 0.0
-	case "bool":
-		return false
 	case "time":
 		return &time.Time{}
 	}

@@ -69,6 +69,7 @@ type Options struct {
 	SavePath               string
 	GoModName              string
 	IgnoreRoutes           []string
+	Require                map[string]bool
 	iris                   *iris.Application
 }
 
@@ -86,7 +87,7 @@ func Init(options *Options) {
 		openapi := initOpenAPI()
 
 		if options.iris != nil {
-			if err := irisRouterStrategy(options.iris, openapi, options.SearchIdentifiers, options.StructsMappingRootPath, options.GoModName, options.IgnoreRoutes); err != nil {
+			if err := irisRouterStrategy(options, openapi); err != nil {
 				panic(err)
 			}
 		}
