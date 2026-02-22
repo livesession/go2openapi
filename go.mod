@@ -1,4 +1,4 @@
-module github.com/livesession/restflix
+module github.com/livesession/go2openapi
 
 go 1.13
 
