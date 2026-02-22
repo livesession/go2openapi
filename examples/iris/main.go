@@ -21,7 +21,7 @@ func main() {
 			},
 		},
 		StructsMappingRootPath: "./test",
-		SavePath:               "",
+		SavePath:               "./test.json",
 		GoModName:              "github.com/livesession/go2openapi",
 	}).
 		WithIris(app.App()),

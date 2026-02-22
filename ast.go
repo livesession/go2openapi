@@ -29,8 +29,14 @@ type SearchIdentifier struct {
 var goModReplace map[string]string
 
 func init() {
-	fB, _ := ioutil.ReadFile("./go.mod")
-	modFile, _ := modfile.Parse("go.mod", fB, nil)
+	fB, err := ioutil.ReadFile("./go.mod")
+	if err != nil {
+		panic(err)
+	}
+	modFile, err := modfile.Parse("go.mod", fB, nil)
+	if err != nil {
+		panic(err)
+	}
 
 	goModReplace = make(map[string]string)
 
@@ -91,8 +97,8 @@ func parseRouterMethod(
 	// path
 	var item *openapi3.PathItem
 
-	if _, ok := openapi.Paths[route.Path]; ok {
-		item = openapi.Paths[route.Path]
+	if v := openapi.Paths.Value(route.Path); v != nil {
+		item = v
 	} else {
 		item = &openapi3.PathItem{}
 	}
@@ -118,7 +124,7 @@ func parseRouterMethod(
 		item.Delete = pathOperation
 	}
 
-	openapi.Paths[route.Path] = item
+	openapi.Paths.Set(route.Path, item)
 
 root:
 	for _, f := range node.Decls {
@@ -296,7 +302,7 @@ func parseHandlerBodyAST(
 		Value: requestBody,
 	}
 
-	operation := openAPIOperationByMethod(openapi.Paths[route.Path], route.Method)
+	operation := openAPIOperationByMethod(openapi.Paths.Value(route.Path), route.Method)
 
 	if operation == nil {
 		log.Printf("operation not found, [path=%s, method=%s]", route.Path, route.Method)
@@ -334,7 +340,7 @@ func parseHandlerResponseAST(
 		responseJSON := openapi3.NewResponse().
 			WithJSONSchemaRef(schemaRef)
 
-		operation := openAPIOperationByMethod(openapi.Paths[route.Path], route.Method)
+		operation := openAPIOperationByMethod(openapi.Paths.Value(route.Path), route.Method)
 		operation.Responses.Default().Value = responseJSON
 	}
 
@@ -1039,7 +1045,7 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(operationName string, expr a
 		return &openapi3.SchemaRef{
 			Ref: "",
 			Value: &openapi3.Schema{
-				Type:    ident.Name,
+				Type:    &openapi3.Types{ident.Name},
 				Example: getPrimitiveTypeDefaultValue(ident.Name),
 			},
 		}
@@ -1049,7 +1055,7 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(operationName string, expr a
 		return &openapi3.SchemaRef{
 			Ref: "",
 			Value: &openapi3.Schema{
-				Type:  "array",
+				Type:  &openapi3.Types{"array"},
 				Items: schemaRefFromIdent(ident),
 			},
 		}
@@ -1059,11 +1065,11 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(operationName string, expr a
 		return &openapi3.SchemaRef{
 			Ref: "",
 			Value: &openapi3.Schema{
-				Type: "array",
+				Type: &openapi3.Types{"array"},
 				Items: &openapi3.SchemaRef{
 					Ref: "",
 					Value: &openapi3.Schema{
-						Type:       "object",
+						Type:       &openapi3.Types{"object"},
 						Properties: props,
 					},
 				},
@@ -1227,7 +1233,7 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(operationName string, expr a
 		return &openapi3.SchemaRef{
 			Ref: "",
 			Value: &openapi3.Schema{
-				Type:    valType,
+				Type:    &openapi3.Types{valType},
 				Example: getPrimitiveTypeDefaultValue(valType),
 			},
 		}
@@ -1361,7 +1367,7 @@ func (encoder *astSchemaEncoder) astExprToSchemaRef(operationName string, expr a
 			properties[propertyKey] = &openapi3.SchemaRef{
 				Ref: "",
 				Value: &openapi3.Schema{
-					Type:    valType,
+					Type:    &openapi3.Types{valType},
 					Example: getPrimitiveTypeDefaultValue(valType),
 				},
 			}
@@ -2067,7 +2073,7 @@ func (encoder astSchemaEncoder) emptySchema(schemaRef *openapi3.SchemaRef) bool 
 	}
 
 	if encoder.emptySchemaPropertiesOrItems(schemaRef) {
-		return schemaRef.Value.Type == ""
+		return schemaRef.Value.Type == nil || len(*schemaRef.Value.Type) == 0
 	}
 
 	return false

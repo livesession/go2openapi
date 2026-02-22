@@ -19,29 +19,20 @@ func initOpenAPI() *openapi3.T {
 		},
 		Servers: openapi3.Servers{
 			{
-				ExtensionProps: openapi3.ExtensionProps{},
-				URL:            "https://api.livesession.io",
-				Description:    "Production",
-				Variables:      nil,
+				URL:         "https://api.livesession.io",
+				Description: "Production",
 			},
 			{
-				ExtensionProps: openapi3.ExtensionProps{},
-				URL:            "https://api-labs.livesession.io/",
-				Description:    "Labs",
-				Variables:      nil,
+				URL:         "https://api-labs.livesession.io/",
+				Description: "Labs",
 			},
 			{
-				ExtensionProps: openapi3.ExtensionProps{},
-				URL:            "http://localhost:3001",
-				Description:    "Local",
-				Variables:      nil,
+				URL:         "http://localhost:3001",
+				Description: "Local",
 			},
 		},
-		Paths:        make(openapi3.Paths),
-		Security:     nil,
-		Tags:         nil,
-		ExternalDocs: nil,
-		Components: openapi3.Components{
+		Paths: openapi3.NewPaths(),
+		Components: &openapi3.Components{
 			RequestBodies: make(openapi3.RequestBodies),
 		},
 	}
