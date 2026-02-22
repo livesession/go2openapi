@@ -1,4 +1,4 @@
-package restflix
+package go2openapi
 
 import (
 	"fmt"

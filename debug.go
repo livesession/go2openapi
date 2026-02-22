@@ -1,8 +1,8 @@
-package restflix
+package go2openapi
 
 //var debugOperationMethod = "[POST]-accounts-google-directory-users"
 
-//var debugOperationMethod = "[GET]-agents-exports"
+// var debugOperationMethod = "[GET]-agents-exports"
 var debugOperationMethod = "[POST]-agents-exports"
 
 // POST /accounts/google-directory/users -> users any => DONE

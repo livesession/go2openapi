@@ -3,8 +3,8 @@ package objects
 import (
 	"time"
 
-	"github.com/livesession/restflix/test/app/objects/outside"
-	apikit_objects "github.com/livesession/restflix/test/app/objects/outside2"
+	"github.com/livesession/go2openapi/test/app/objects/outside"
+	apikit_objects "github.com/livesession/go2openapi/test/app/objects/outside2"
 )
 
 type ExampleStructInOtherFileAndPackage struct {
